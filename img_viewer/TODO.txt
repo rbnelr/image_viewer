@@ -1,0 +1,7 @@
+degin ideas:
+ test my cool image viewer approach
+
+visual:
+ fix mipmaps not being generated
+ 
+ if filtering is still ugly, look at filtering techniques
