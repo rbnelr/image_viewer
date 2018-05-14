@@ -1,5 +1,8 @@
 degin ideas:
  test my cool image viewer approach
+ -> implemted zooming, works really well
+
+ implement dragging around
 
 visual:
  fix mipmaps not being generated

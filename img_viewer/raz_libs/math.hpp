@@ -73,16 +73,26 @@ static constexpr f32 map (f32 x, f32 in_a, f32 in_b) {	return (x -in_a)/(in_b -i
 static constexpr f32 map (f32 x, f32 in_a, f32 in_b, f32 out_a, f32 out_b) {
 														return lerp(out_a, out_b, map(x, in_a, in_b)); }
 
-template <typename T> static T mymod (T val, T range) {
+template <typename T> static T mymod (T x, T range) {
 	#if 1
-	T ret = mod(val, range);
+	T remainder = mod(x, range);
 	if (range > 0) {
-		if (ret < 0) ret += range;
+		if (remainder < 0) remainder += range;
 	} else {
-		if (ret > 0) ret -= range;
+		if (remainder > 0) remainder -= range;
 	}
-	return ret;
+	return remainder;
 	#endif
+}
+
+f32 mod_range (f32 x, f32 a, f32 b, f32* quotient) {
+	x -= a;
+	f32 range = b -a;
+
+	f32 modulo = mymod(x, range);
+	*quotient = floorf(x / range);
+
+	return modulo + a;
 }
 
 struct Sin_Cos {

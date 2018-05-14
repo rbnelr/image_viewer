@@ -11,7 +11,7 @@ uniform	vec2	screen_dim;
 
 void main () {
 	vec2 pos = attr_pos_screen / screen_dim;
-	pos.y = 1 -pos.y; // positings are specified top-down
+	pos.y = 1 -pos.y; // positions are specified top-down
 	
 	gl_Position =		vec4(pos * 2 -1, 0,1);
 	vs_uv =				attr_uv;
