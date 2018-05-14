@@ -115,6 +115,10 @@ struct App {
 			
 			return &ret.first->second->full_tex;
 		}
+
+		void clear () {
+			images.clear();
+		}
 	};
 
 	struct Content {
@@ -157,13 +161,25 @@ struct App {
 		}
 	}
 
-	Image_Cache		img_cache;
-	Directory_Tree	test_dir;
+	Image_Cache					img_cache;
+	unique_ptr<Directory_Tree>	test_dir;
 
 	void init () {
-		test_dir.name = "P:/img_viewer_sample_files/";
+		
+	}
 
-		_populate(&test_dir, find_files_recursive(test_dir.name));
+	void files_update () {
+		static str test_dir_name = "D:/pictures/wallpapers/";
+
+		if (ImGui::InputText_str("test_dir_name", &test_dir_name) || frame_i == 0) {
+			img_cache.clear();
+			
+			test_dir = nullptr;
+			test_dir = make_unique<Directory_Tree>();
+			
+			test_dir->name = test_dir_name;
+			_populate(test_dir.get(), find_files_recursive(test_dir_name));
+		}
 	}
 
 	void gui_file_tree (Directory_Tree* dir) {
@@ -565,15 +581,18 @@ struct App {
 		//	});
 
 		Begin("Protoype GUI", nullptr, ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoTitleBar);
-		auto wnd_size = GetWindowSize();
-		int left_bar_size = (int)wnd_size.x;
+		
+		files_update();
 
 		static bool directories_always_first = false;
 		Checkbox("directories_always_first", &directories_always_first);
 
-		gui_file_grid(&test_dir, left_bar_size);
+		auto wnd_size = GetWindowSize();
+		int left_bar_size = (int)wnd_size.x;
 
-		gui_file_tree(&test_dir);
+		gui_file_grid(test_dir.get(), left_bar_size);
+
+		gui_file_tree(test_dir.get());
 
 
 		End();
