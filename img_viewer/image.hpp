@@ -21,7 +21,7 @@ public:
 	}
 
 	virtual cstr what () const {
-		return msg.c_str(); // returned string will go out of scope when the Expt_File_Load_Fail object goes out of scope
+		return msg.c_str(); // returned string will go out of scope when this Exception goes out of scope
 	}
 
 private:

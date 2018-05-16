@@ -1,7 +1,14 @@
 #pragma once
 
 #include "glad_helper.hpp"
+
+#include "windows.h"
+#include "Shlobj.h"
+
 #include "glfw3.h"
+
+#define GLFW_EXPOSE_NATIVE_WIN32 1
+#include "glfw3native.h"
 
 #include "basic_typedefs.hpp"
 #include "math.hpp"

@@ -10,8 +10,7 @@ using std::shared_ptr;
 using std::make_shared;
 
 #include <string>
-typedef std::string str;
-typedef std::string const& strcr;
+using std::string;
 
 #include <vector>
 
@@ -67,6 +66,9 @@ struct MButton {
 };
 
 #include <map>
+#include <thread>
+
+#include "threadsafe_queue.hpp"
 
 struct App {
 	Display			disp;
@@ -80,40 +82,111 @@ struct App {
 	MButton			rmb =	 {0,0,0};
 
 	struct Image_Cache {
-		
+
 		struct Image {
 			Image2D		full_src_img;
 			Texture2D	full_tex;
+
+			bool		currently_async_loading; // loading async via threadpool
 		};
 
 		std::map< str, unique_ptr<Image> >	images; // key: filepath
 
+		std::vector< std::thread >	img_loader_threads;
+
+		struct Img_Loader_Threadpool_Job { // input is filepath to file to load
+			string	filepath;
+		};
+		struct Img_Loader_Threadpool_Result {
+			string	filepath;
+			Image2D	full_src_img;
+		};
+
+		threadsafe_queue<Img_Loader_Threadpool_Job>		img_loader_jobs;
+		threadsafe_queue<Img_Loader_Threadpool_Result>	img_loader_results;
+		
+		void img_loader_thread_pool_thread (u32 thread_indx) {
+			for (;;) {
+				Img_Loader_Threadpool_Job job = std::move( img_loader_jobs.pop() );
+
+				Img_Loader_Threadpool_Result res;
+				res.filepath = job.filepath;
+
+				// load image from disk
+				try {
+					res.full_src_img = Image2D::load_from_file(job.filepath);
+				} catch (Expt_File_Load_Fail const& e) {
+					//assert_log(false, e.what()); // is not threadsafe!
+					// res.full_src_img.pixels == nullptr -> signifies that image was not loaded
+				}
+
+				img_loader_results.push( std::move(res) );
+			}
+		}
+
+		void init_thread_pool () {
+			u32 cpu_threads = std::thread::hardware_concurrency();
+			
+			u32 threads = max(cpu_threads / 2, 2u);
+
+			for (u32 i=0; i<threads; ++i) {
+				img_loader_threads.emplace_back( &Image_Cache::img_loader_thread_pool_thread, this, i );
+			}
+		}
+		~Image_Cache () {
+			for (auto& t : img_loader_threads)
+				t.detach(); // don't want to wait for processing to finish, we could only ever leak open file handles (i think), but we want to exit the app after this anyway
+		}
+
 		Texture2D* query_image_texture (strcr filepath) {
 			auto it = images.find(filepath);
-			if (it != images.end()) // already cached
-				return &it->second->full_tex;
-			// not cached yet
+			if (it != images.end()) {
+				// already cached or just inserted
+				Image& tmp = *it->second;
+				return tmp.currently_async_loading ? nullptr : &tmp.full_tex;
+			} else {
+				// not cached yet
+			
+				auto img = make_unique<Image>();
 
-			auto img = make_unique<Image>();
+				img_loader_jobs.push({filepath});
 
-			try {
-				img->full_src_img = Image2D::load_from_file(filepath);
-			} catch (Expt_File_Load_Fail const& e) {
-				assert_log(false, e.what());
-				return nullptr;
+				img->currently_async_loading = true;
+			
+				auto ret = images.emplace(filepath, std::move(img));
+				assert_log(ret.second);
+
+				return nullptr; // just started loading async
 			}
-			
-			img->full_tex = Texture2D::generate();
-			img->full_tex.upload( img->full_src_img.pixels, img->full_src_img.size );
+		}
 
-			img->full_tex.gen_mipmaps();
-			img->full_tex.set_filtering_mipmapped();
-			img->full_tex.set_border_clamp();
+		void async_image_loading () {
+			for (;;) {
+				
+				Img_Loader_Threadpool_Result res;
+				if (!img_loader_results.try_pop(&res))
+					break; // currently no images loaded async, stop polling
 
-			auto ret = images.emplace(filepath, std::move(img));
-			assert_log(ret.second);
-			
-			return &ret.first->second->full_tex;
+				if (res.full_src_img.pixels == nullptr) {
+					// image could not be loaded, simply pretend it never finished loading for development purposes
+				} else {
+					// create texture from image by uploading
+					auto it = images.find(res.filepath);
+					assert_log(it != images.end());
+					
+					auto& tmp = *it->second;
+					tmp.full_src_img = std::move( res.full_src_img );
+
+					tmp.full_tex = Texture2D::generate();
+					tmp.full_tex.upload( tmp.full_src_img.pixels, tmp.full_src_img.size );
+
+					tmp.full_tex.gen_mipmaps();
+					tmp.full_tex.set_filtering_mipmapped();
+					tmp.full_tex.set_border_clamp();
+
+					tmp.currently_async_loading = false;
+				}
+			}
 		}
 
 		void clear () {
@@ -162,24 +235,78 @@ struct App {
 	}
 
 	Image_Cache					img_cache;
-	unique_ptr<Directory_Tree>	test_dir;
+	unique_ptr<Directory_Tree>	viewed_dir = nullptr;
 
 	void init () {
-		
+		img_cache.init_thread_pool();
 	}
 
-	void files_update () {
-		static str test_dir_name = "D:/pictures/wallpapers/";
+	void gui () {
+		static str viewed_dir_path_input = "P:/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
+		
+		if (ImGui::Button("Directory selection dialog")) {
+			char buf[MAX_PATH];
+			
+			BROWSEINFO	i = {};
+			i.hwndOwner = glfwGetWin32Window(disp.wnd);
+			i.pszDisplayName = buf;
+			i.lpszTitle = "test";
+			i.ulFlags = BIF_NEWDIALOGSTYLE;
 
-		if (ImGui::InputText_str("test_dir_name", &test_dir_name) || frame_i == 0) {
-			img_cache.clear();
-			
-			test_dir = nullptr;
-			test_dir = make_unique<Directory_Tree>();
-			
-			test_dir->name = test_dir_name;
-			_populate(test_dir.get(), find_files_recursive(test_dir_name));
+			if (SHBrowseForFolder(&i) != NULL) {
+				viewed_dir_path_input = string(i.lpszTitle);
+			}
 		}
+
+		ImGui::InputText_str("viewed_dir_path", &viewed_dir_path_input);
+		
+		bool trigger_load = ImGui::Button("Trigger Directory Load") || frame_i == 0;
+
+		static string load_msg = "<not loaded yet>";
+		static bool load_ok = false;
+
+		if (trigger_load) {
+			load_ok = false;
+			
+			img_cache.clear();
+			viewed_dir = nullptr;
+			
+			try {
+				auto fix_dir_path = [&] (string dir) -> string {
+					for (char& c : dir) {
+						if (c == '\\')
+							c = '/';
+					}
+					if (dir.size() > 0 && dir.back() != '/') {
+						dir.push_back('/');
+					}
+					return dir;
+				};
+
+				string viewed_dir_path = fix_dir_path(viewed_dir_path_input);
+
+				auto new_dir = find_files_recursive(viewed_dir_path);
+				
+				viewed_dir = make_unique<Directory_Tree>();
+				viewed_dir->name = viewed_dir_path;
+
+				_populate(viewed_dir.get(), new_dir);
+
+				load_ok = true;
+
+			} catch (Expt_Path_Not_Found const& e) {
+				load_msg = prints("Path not found! \"%s\"", e.get_path().c_str());
+			}
+
+		}
+
+		static const ImVec4 col_ok =	ImVec4(0,1,0,1);
+		static const ImVec4 col_err =	ImVec4(1,0,0,1);
+
+		ImGui::SameLine();
+		ImGui::TextColored(load_ok ? col_ok : col_err, load_ok ? "OK" : load_msg.c_str());
+
+		ImGui::Separator();
 	}
 
 	void gui_file_tree (Directory_Tree* dir) {
@@ -208,20 +335,21 @@ struct App {
 			TreePop();
 		}
 	}
-	void gui_file_grid (Directory_Tree* dir, int left_bar_size) {
-		static flt zoom_multiplier_target = 1;
+	
+	void file_grid (Directory_Tree* dir, int left_bar_size) {
+		static flt zoom_multiplier_target = 1 ? 0.3f : 1;
 		static flt zoom_multiplier = zoom_multiplier_target;
 
 		flt zoom_delta = 0;
 		zoom_delta = (flt)mouse_wheel_diff;
 
 		static flt zoom_multiplier_anim_start;
-		static int zoom_anim_frames_remain = 0;
-		static int anim_frames = 4;
-		ImGui::DragInt("anim_frames", &anim_frames);
+		static int zoom_smoothing_frames_remain = 0;
+		static int zoom_smoothing_frames = 4;
+		ImGui::DragInt("zoom_smoothing_frames", &zoom_smoothing_frames, 1.0f / 40);
 
 		static flt zoom_step = 0.1f;
-		ImGui::DragFloat("zoom_step", &zoom_step);
+		ImGui::DragFloat("zoom_step", &zoom_step, 0.01f / 40);
 
 		if (zoom_delta != 0) {
 			flt zoom_level = log2f(zoom_multiplier_target);
@@ -229,26 +357,26 @@ struct App {
 			zoom_multiplier_anim_start = zoom_multiplier;
 			zoom_multiplier_target = powf(2.0f, zoom_level +zoom_delta * zoom_step);
 
-			zoom_anim_frames_remain = anim_frames -1; // start with anim t=1 frame instead of t=0 to reduce visual input lag
+			zoom_smoothing_frames_remain = zoom_smoothing_frames -1; // start with anim t=1 frame instead of t=0 to reduce visual input lag
 		}
 
-		zoom_multiplier = lerp(zoom_multiplier_anim_start, zoom_multiplier_target, (flt)(anim_frames -zoom_anim_frames_remain) / anim_frames);
+		zoom_multiplier = lerp(zoom_multiplier_anim_start, zoom_multiplier_target, (flt)(zoom_smoothing_frames -zoom_smoothing_frames_remain) / zoom_smoothing_frames);
 
-		ImGui::DragInt("zoom_anim_frames_remain", &zoom_anim_frames_remain);
+		ImGui::DragInt("zoom_anim_frames_remain", &zoom_smoothing_frames_remain);
 		ImGui::DragFloat("zoom_multiplier_target", &zoom_multiplier_target);
 		ImGui::DragFloat("zoom_multiplier", &zoom_multiplier);
 
-		if (zoom_anim_frames_remain != 0)
-			zoom_anim_frames_remain--;
+		if (zoom_smoothing_frames_remain != 0)
+			zoom_smoothing_frames_remain--;
 
-		v2 cell_sz = 180 * zoom_multiplier;
+		v2 cell_sz = disp.dim.y * zoom_multiplier;
 
 		//
 		v2 grid_sz_px = (v2)(disp.dim -iv2(left_bar_size, 0));
 
 		v2 view_center = v2((flt)left_bar_size, 0) +(v2)grid_sz_px / 2;
 
-		static flt debug_view_size_multiplier = 1;
+		static flt debug_view_size_multiplier = 1 ? 2 : 1;
 		ImGui::DragFloat("debug_view_size_multiplier", &debug_view_size_multiplier, 1.0f/300, 0.01f);
 		if (debug_view_size_multiplier != 1) {
 			debug_view_size_multiplier = max(debug_view_size_multiplier, 0.0001f);
@@ -262,11 +390,15 @@ struct App {
 
 		v2 grid_sz_cells = grid_sz_px / cell_sz;
 
-		static flt focus = (flt)dir->content.size() / 2;
+		static flt view_coord = 0;//(flt)(dir ? (int)dir->content.size() : 0) / 2;
+		static v2 view_offs = 0;
 		
-		ImGui::DragFloat("focus", &focus, 1.0f / 50, -1, (flt)dir->content.size() +1);
+		ImGui::DragFloat("view_coord", &view_coord, 1.0f / 50);
+		ImGui::DragFloat2("view_offs", &view_offs.x, 1.0f / 50);
 
-		for (int content_i=0; content_i<(int)dir->content.size(); content_i++) {
+		ImGui::Separator();
+
+		for (int content_i=0; content_i<(dir ? (int)dir->content.size() : 0); content_i++) {
 			auto img_instance = [&] (v2 pos_center_rel, flt alpha) {
 				if (	pos_center_rel.y < -grid_sz_cells.y/2 -0.5f ||
 						pos_center_rel.y > +grid_sz_cells.y/2 +0.5f)
@@ -279,7 +411,7 @@ struct App {
 
 				if (dynamic_cast<Directory_Tree*>(c)) {
 
-					tex = img_cache.query_image_texture("assets_src/folder_icon.png");
+					tex = img_cache.query_image_texture("assets_src/folder_icon.png"); // these icons should be loaded upfront and without img_cache, but this works fine for now
 
 				} else if (dynamic_cast<File*>(c)) {
 
@@ -287,6 +419,10 @@ struct App {
 
 					tex = img_cache.query_image_texture(dir->name+file->name);
 
+					if (!tex) {
+						tex = img_cache.query_image_texture("assets_src/loading_icon.png"); // these icons should be loaded upfront and without img_cache, but this works fine for now
+						alpha *= 0.2f;
+					}
 				} else {
 					assert_log(false);
 				}
@@ -306,7 +442,7 @@ struct App {
 				}
 			};
 
-			flt rel_indx = (flt)content_i -focus;
+			flt rel_indx = (flt)content_i -view_coord;
 
 			flt quotient;
 			flt remainder = mod_range(rel_indx, -grid_sz_cells.x/2, +grid_sz_cells.x/2, &quotient);
@@ -314,10 +450,13 @@ struct App {
 			flt out_of_bounds_l = max(-(remainder -0.5f +grid_sz_cells.x/2), 0.0f);
 			flt out_of_bounds_r = max(  remainder +0.5f -grid_sz_cells.x/2 , 0.0f);
 			
-			v2 pos_center_rel = v2(remainder,quotient);
+			v2 pos_center_rel = v2(remainder,quotient) -view_offs;
 
 			assert_log((out_of_bounds_l +out_of_bounds_r) <= 1);
-			img_instance(pos_center_rel, content_i == (int)roundf(focus) ? 1 : 1 -out_of_bounds_l -out_of_bounds_r);
+			img_instance(pos_center_rel, content_i == (int)roundf(view_coord) ? 1 : 1 -out_of_bounds_l -out_of_bounds_r);
+
+			//ImGui::Value("content_i", content_i);
+			//ImGui::Value("(int)roundf(view_coord)", (int)roundf(view_coord));
 
 			if (out_of_bounds_l > 0) {
 				img_instance((pos_center_rel -v2(-grid_sz_cells.x,1)), out_of_bounds_l);
@@ -567,7 +706,7 @@ struct App {
 
 	}
 
-	void gui () {
+	void render_all () {
 		using namespace ImGui;
 
 		SetNextWindowBgAlpha(1);
@@ -582,18 +721,15 @@ struct App {
 
 		Begin("Protoype GUI", nullptr, ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoTitleBar);
 		
-		files_update();
-
-		static bool directories_always_first = false;
-		Checkbox("directories_always_first", &directories_always_first);
-
 		auto wnd_size = GetWindowSize();
 		int left_bar_size = (int)wnd_size.x;
 
-		gui_file_grid(test_dir.get(), left_bar_size);
+		img_cache.async_image_loading();
 
-		gui_file_tree(test_dir.get());
+		gui();
+		file_grid(viewed_dir.get(), left_bar_size);
 
+		//gui_file_tree(viewed_dir.get());
 
 		End();
 
@@ -635,7 +771,7 @@ struct App {
 		glClearColor(0,0,0,1);
 		glClear(GL_COLOR_BUFFER_BIT);
 
-		gui();
+		render_all();
 
 		imgui_ctx.draw(disp.dim);
 

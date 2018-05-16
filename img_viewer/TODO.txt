@@ -1,10 +1,20 @@
-degin ideas:
- test my cool image viewer approach
- -> implemted zooming, works really well
-
+design ideas:
  implement dragging around
 
 visual:
  fix mipmaps not being generated
  
  if filtering is still ugly, look at filtering techniques
+
+functionality
+
+
+DONE:
+ test my cool image viewer approach
+ -> implemted zooming, works really well
+ 
+ add proper directory input
+ -> works very good, at least for dev use
+
+ added actual async disk-to-ram loading of full size images using a thread pool
+ -> really cool, and worked without any problems

@@ -1,8 +1,7 @@
 #pragma once
 
 #include <string>
-typedef std::string str;
-typedef std::string const& strcr;
+using std::string;
 
 #include <vector>
 
@@ -11,6 +10,28 @@ typedef std::string const& strcr;
 #include "logging.hpp"
 
 namespace n_find_files {
+	class Expt_Path_Not_Found : std::exception {
+	public:
+		Expt_Path_Not_Found (string path, string api_error): path{path}, api_error{api_error} {
+			msg = prints("Path \"%s\" could not be found (file or directory does not exist)!", path.c_str());
+		}
+
+		virtual cstr what () const {
+			return msg.c_str(); // returned string will go out of scope when this Exception goes out of scope
+		}
+		string const& get_path () const {
+			return path;
+		}
+		string const& get_api_error () const {
+			return api_error;
+		}
+
+	private:
+		string	msg;
+		string	path;
+		string	api_error;
+	};
+	
 	struct Directory {
 		// contents
 		std::vector<str>			dirnames;
@@ -35,7 +56,7 @@ namespace n_find_files {
 			if (err == ERROR_FILE_NOT_FOUND) {
 				// no files found
 			} else {
-				assert_log(false, "FindFirstFile failed! [%x]", err);
+				throw Expt_Path_Not_Found(search_str, prints("FindFirstFile failed! [%x]", err));
 			}
 			FindClose(hFindFile);
 			return;
@@ -60,6 +81,7 @@ namespace n_find_files {
 				if (err == ERROR_NO_MORE_FILES) {
 					break;
 				} else {
+					// TODO: in which cases would this happen?
 					assert_log(false, "FindNextFile failed! [%x]", err);
 					FindClose(hFindFile);
 					return;
