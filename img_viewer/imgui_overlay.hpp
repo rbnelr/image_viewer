@@ -23,6 +23,33 @@ namespace ImGui {
 	IMGUI_API void Value (const char* prefix, iv2 v) {
 		Text("%s: %d, %d", prefix, v.x,v.y);
 	}
+	IMGUI_API void Value (const char* prefix, u64 i) {
+		Text("%s: %lld", prefix, i);
+	}
+	IMGUI_API void Value_Bytes (const char* prefix, u64 i) {
+		cstr unit;
+		u64 val = i;
+		if (		i < ((u64)1024) ) {
+			val /= (u64)1;
+			unit = "B";
+		} else if (	i < ((u64)1024*1024) ) {
+			val /= (u64)1024;
+			unit = "KB";
+		} else if (	i < ((u64)1024*1024*1024) ) {
+			val /= (u64)1024*1024;
+			unit = "MB";
+		} else if (	i < ((u64)1024*1024*1024*1024) ) {
+			val /= (u64)1024*1024*1024;
+			unit = "GB";
+		} else if (	i < ((u64)1024*1024*1024*1024*1024) ) {
+			val /= (u64)1024*1024*1024*1024;
+			unit = "TB";
+		} else {
+			val /= (u64)1024*1024*1024*1024*1024;
+			unit = "PB";
+		}
+		Text("%s: %lld %s", prefix, val, unit);
+	}
 
 	IMGUI_API bool InputText_str (const char* label, std::string* s, ImGuiInputTextFlags flags = 0, ImGuiTextEditCallback callback = NULL, void* user_data = NULL) {
 		int cur_length = (int)s->size();
@@ -214,4 +241,4 @@ struct Imgui_Context {
 			}
 		}
 	}
-};
+} imgui_context;

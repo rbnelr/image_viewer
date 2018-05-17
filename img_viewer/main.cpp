@@ -23,18 +23,19 @@ using std::string;
 
 #include "vector_util.hpp"
 #include "logging.hpp"
-#include "file_io.hpp"
+#include "simple_file_io.hpp"
 
 #include "imgui_overlay.hpp"
 #include "platform.hpp"
 
 bool ctrl_down = false;
+bool do_toggle_fullscreen = false;
 
 void glfw_key_event (GLFWwindow* window, int key, int scancode, int action, int mods) {
 	ImGuiIO& io = ImGui::GetIO();
 
-	assert_log(key >= 0 && key < ARRLEN(io.KeysDown));
-	io.KeysDown[key] = action != GLFW_RELEASE;
+	if (key >= 0 && key < ARRLEN(io.KeysDown))
+		io.KeysDown[key] = action != GLFW_RELEASE;
 
 	// from https://github.com/ocornut/imgui/blob/master/examples/opengl3_example/imgui_impl_glfw_gl3.cpp
 	(void)mods; // Modifiers are not reliable across systems
@@ -44,6 +45,13 @@ void glfw_key_event (GLFWwindow* window, int key, int scancode, int action, int 
 	io.KeySuper = io.KeysDown[GLFW_KEY_LEFT_SUPER] || io.KeysDown[GLFW_KEY_RIGHT_SUPER];
 
 	ctrl_down = io.KeyCtrl;
+
+	switch (key) {
+		case GLFW_KEY_F11: {
+			if (action == GLFW_PRESS)
+				do_toggle_fullscreen = true;
+		} break;
+	}
 }
 void glfw_char_event (GLFWwindow* window, unsigned int codepoint, int mods) {
 	ImGuiIO& io = ImGui::GetIO();
@@ -71,15 +79,42 @@ struct MButton {
 #include "threadsafe_queue.hpp"
 
 struct App {
-	Display			disp;
-	Imgui_Context	imgui_ctx;
-
 	int				frame_i = 0;
 
 	//icol			bg_col =		irgb(41,49,52);
 	
 	MButton			lmb =	 {0,0,0};
 	MButton			rmb =	 {0,0,0};
+
+	unique_ptr<Texture2D>	tex_folder_icon;
+	unique_ptr<Texture2D>	tex_loading_icon;
+
+	static Texture2D create_null_texture () {
+		auto tex = Texture2D::generate();
+		rgba8 col = rgba8(255,0,255,255);
+		tex.upload(&col, 1);
+		return std::move(tex);
+	}
+	static Texture2D simple_load_texture (strcr filepath) {
+		Image2D img;
+
+		// load image from disk
+		try {
+			img = Image2D::load_from_file(filepath);
+		} catch (Expt_File_Load_Fail const& e) {
+			assert_log(false, e.what());
+			return std::move(create_null_texture());
+		}
+
+		auto tex = Texture2D::generate();
+		tex.upload( img.pixels, img.size );
+
+		tex.gen_mipmaps();
+		tex.set_filtering_mipmapped();
+		tex.set_border_clamp();
+
+		return std::move(tex);
+	}
 
 	struct Image_Cache {
 
@@ -91,6 +126,9 @@ struct App {
 		};
 
 		std::map< str, unique_ptr<Image> >	images; // key: filepath
+
+		u64 cpu_memory_size = 0;
+		u64 gpu_memory_size = 0; // this might not be accurate, since we can't be sure of the gpu texel format
 
 		std::vector< std::thread >	img_loader_threads;
 
@@ -117,7 +155,7 @@ struct App {
 					res.full_src_img = Image2D::load_from_file(job.filepath);
 				} catch (Expt_File_Load_Fail const& e) {
 					//assert_log(false, e.what()); // is not threadsafe!
-					// res.full_src_img.pixels == nullptr -> signifies that image was not loaded
+					// res.full_src_img is still null (by which i mean default constructed) -> signifies that image was not loaded
 				}
 
 				img_loader_results.push( std::move(res) );
@@ -146,7 +184,6 @@ struct App {
 				return tmp.currently_async_loading ? nullptr : &tmp.full_tex;
 			} else {
 				// not cached yet
-			
 				auto img = make_unique<Image>();
 
 				img_loader_jobs.push({filepath});
@@ -161,6 +198,12 @@ struct App {
 		}
 
 		void async_image_loading () {
+			
+			if (ImGui::CollapsingHeader("Image_Cache", ImGuiTreeNodeFlags_DefaultOpen)) {
+				ImGui::Value_Bytes("cpu_memory_size", cpu_memory_size);
+				ImGui::Value_Bytes("gpu_memory_size", gpu_memory_size);
+			}
+			
 			for (;;) {
 				
 				Img_Loader_Threadpool_Result res;
@@ -177,12 +220,16 @@ struct App {
 					auto& tmp = *it->second;
 					tmp.full_src_img = std::move( res.full_src_img );
 
+					cpu_memory_size += tmp.full_src_img.calc_size();
+
 					tmp.full_tex = Texture2D::generate();
 					tmp.full_tex.upload( tmp.full_src_img.pixels, tmp.full_src_img.size );
 
 					tmp.full_tex.gen_mipmaps();
 					tmp.full_tex.set_filtering_mipmapped();
 					tmp.full_tex.set_border_clamp();
+
+					gpu_memory_size += tmp.full_src_img.calc_size(); // same as cpu memory size for now
 
 					tmp.currently_async_loading = false;
 				}
@@ -191,6 +238,9 @@ struct App {
 
 		void clear () {
 			images.clear();
+
+			cpu_memory_size = 0;
+			gpu_memory_size = 0;
 		}
 	};
 
@@ -238,27 +288,35 @@ struct App {
 	unique_ptr<Directory_Tree>	viewed_dir = nullptr;
 
 	void init () {
+		tex_loading_icon = make_unique<Texture2D>( simple_load_texture("assets_src/loading_icon.png") );
+		tex_folder_icon = make_unique<Texture2D>( simple_load_texture("assets_src/folder_icon.png") );
+
 		img_cache.init_thread_pool();
 	}
 
 	void gui () {
-		static str viewed_dir_path_input = "P:/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
+		static str viewed_dir_path_input_text = "P:/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
 		
+		if (!ImGui::CollapsingHeader("viewed_dir_path", ImGuiTreeNodeFlags_DefaultOpen))
+			return;
+
 		if (ImGui::Button("Directory selection dialog")) {
 			char buf[MAX_PATH];
 			
 			BROWSEINFO	i = {};
-			i.hwndOwner = glfwGetWin32Window(disp.wnd);
+			i.hwndOwner = glfwGetWin32Window(disp.window);
 			i.pszDisplayName = buf;
 			i.lpszTitle = "test";
 			i.ulFlags = BIF_NEWDIALOGSTYLE;
 
 			if (SHBrowseForFolder(&i) != NULL) {
-				viewed_dir_path_input = string(i.lpszTitle);
+				viewed_dir_path_input_text = string(i.lpszTitle);
 			}
 		}
 
-		ImGui::InputText_str("viewed_dir_path", &viewed_dir_path_input);
+		ImGui::PushItemWidth( ImGui::GetContentRegionAvailWidth() );
+		ImGui::InputText_str("##viewed_dir_path_input_text", &viewed_dir_path_input_text);
+		ImGui::PopItemWidth();
 		
 		bool trigger_load = ImGui::Button("Trigger Directory Load") || frame_i == 0;
 
@@ -283,7 +341,7 @@ struct App {
 					return dir;
 				};
 
-				string viewed_dir_path = fix_dir_path(viewed_dir_path_input);
+				string viewed_dir_path = fix_dir_path(viewed_dir_path_input_text);
 
 				auto new_dir = find_files_recursive(viewed_dir_path);
 				
@@ -306,38 +364,10 @@ struct App {
 		ImGui::SameLine();
 		ImGui::TextColored(load_ok ? col_ok : col_err, load_ok ? "OK" : load_msg.c_str());
 
-		ImGui::Separator();
 	}
 
-	void gui_file_tree (Directory_Tree* dir) {
-		using namespace ImGui;
-		
-		if (TreeNodeEx(dir->name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-			
-			if (dir->content.size() == 0) {
-				TextDisabled("<empty>");
-			} else {
-				for (auto* c : dir->content) {
-					if (dynamic_cast<Directory_Tree*>(c)) {
-
-						gui_file_tree((Directory_Tree*)c);
-
-					} else if (dynamic_cast<File*>(c)) {
-
-						Text(c->name.c_str());
-
-					} else {
-						assert_log(false);
-					}
-				}
-			}
-
-			TreePop();
-		}
-	}
-	
 	void file_grid (Directory_Tree* dir, int left_bar_size) {
-		static flt zoom_multiplier_target = 1 ? 0.3f : 1;
+		static flt zoom_multiplier_target = 1 ? 0.1f : 1;
 		static flt zoom_multiplier = zoom_multiplier_target;
 
 		flt zoom_delta = 0;
@@ -346,11 +376,9 @@ struct App {
 		static flt zoom_multiplier_anim_start;
 		static int zoom_smoothing_frames_remain = 0;
 		static int zoom_smoothing_frames = 4;
-		ImGui::DragInt("zoom_smoothing_frames", &zoom_smoothing_frames, 1.0f / 40);
-
+		
 		static flt zoom_step = 0.1f;
-		ImGui::DragFloat("zoom_step", &zoom_step, 0.01f / 40);
-
+		
 		if (zoom_delta != 0) {
 			flt zoom_level = log2f(zoom_multiplier_target);
 
@@ -359,28 +387,23 @@ struct App {
 
 			zoom_smoothing_frames_remain = zoom_smoothing_frames -1; // start with anim t=1 frame instead of t=0 to reduce visual input lag
 		}
-
 		zoom_multiplier = lerp(zoom_multiplier_anim_start, zoom_multiplier_target, (flt)(zoom_smoothing_frames -zoom_smoothing_frames_remain) / zoom_smoothing_frames);
-
-		ImGui::DragInt("zoom_anim_frames_remain", &zoom_smoothing_frames_remain);
-		ImGui::DragFloat("zoom_multiplier_target", &zoom_multiplier_target);
-		ImGui::DragFloat("zoom_multiplier", &zoom_multiplier);
 
 		if (zoom_smoothing_frames_remain != 0)
 			zoom_smoothing_frames_remain--;
 
-		v2 cell_sz = disp.dim.y * zoom_multiplier;
+		v2 cell_sz = disp.framebuffer_size_px.y * zoom_multiplier;
 
 		//
-		v2 grid_sz_px = (v2)(disp.dim -iv2(left_bar_size, 0));
+		v2 grid_sz_px = (v2)(disp.framebuffer_size_px -iv2(left_bar_size, 0));
 
 		v2 view_center = v2((flt)left_bar_size, 0) +(v2)grid_sz_px / 2;
 
-		static flt debug_view_size_multiplier = 1 ? 2 : 1;
-		ImGui::DragFloat("debug_view_size_multiplier", &debug_view_size_multiplier, 1.0f/300, 0.01f);
+		static flt debug_view_size_multiplier = 0 ? 2 : 1;
+		
 		if (debug_view_size_multiplier != 1) {
 			debug_view_size_multiplier = max(debug_view_size_multiplier, 0.0001f);
-			
+
 			emit_overlay_rect_outline(view_center -grid_sz_px/2/debug_view_size_multiplier, view_center +grid_sz_px/2/debug_view_size_multiplier, rgba8(255,0,0,255));
 
 			grid_sz_px /= debug_view_size_multiplier;
@@ -390,13 +413,22 @@ struct App {
 
 		v2 grid_sz_cells = grid_sz_px / cell_sz;
 
-		static flt view_coord = 0;//(flt)(dir ? (int)dir->content.size() : 0) / 2;
+		static flt view_coord = 48;//(flt)(dir ? (int)dir->content.size() : 0) / 2;
 		static v2 view_offs = 0;
-		
-		ImGui::DragFloat("view_coord", &view_coord, 1.0f / 50);
-		ImGui::DragFloat2("view_offs", &view_offs.x, 1.0f / 50);
 
-		ImGui::Separator();
+		if (ImGui::CollapsingHeader("file_grid", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::DragInt("zoom_smoothing_frames", &zoom_smoothing_frames, 1.0f / 40);
+			ImGui::DragFloat("zoom_step", &zoom_step, 0.01f / 40);
+
+			ImGui::DragInt("zoom_anim_frames_remain", &zoom_smoothing_frames_remain);
+			ImGui::DragFloat("zoom_multiplier_target", &zoom_multiplier_target);
+			ImGui::DragFloat("zoom_multiplier", &zoom_multiplier);
+
+			ImGui::DragFloat("debug_view_size_multiplier", &debug_view_size_multiplier, 1.0f/300, 0.01f);
+		
+			ImGui::DragFloat("view_coord", &view_coord, 1.0f / 50);
+			ImGui::DragFloat2("view_offs", &view_offs.x, 1.0f / 50);
+		}
 
 		for (int content_i=0; content_i<(dir ? (int)dir->content.size() : 0); content_i++) {
 			auto img_instance = [&] (v2 pos_center_rel, flt alpha) {
@@ -411,7 +443,7 @@ struct App {
 
 				if (dynamic_cast<Directory_Tree*>(c)) {
 
-					tex = img_cache.query_image_texture("assets_src/folder_icon.png"); // these icons should be loaded upfront and without img_cache, but this works fine for now
+					tex = tex_folder_icon.get();
 
 				} else if (dynamic_cast<File*>(c)) {
 
@@ -420,7 +452,7 @@ struct App {
 					tex = img_cache.query_image_texture(dir->name+file->name);
 
 					if (!tex) {
-						tex = img_cache.query_image_texture("assets_src/loading_icon.png"); // these icons should be loaded upfront and without img_cache, but this works fine for now
+						tex = tex_loading_icon.get();
 						alpha *= 0.2f;
 					}
 				} else {
@@ -466,82 +498,6 @@ struct App {
 			}
 
 		}
-
-		#if 0
-		static flt zoom_multiplier_target = 1;
-		static flt zoom_multiplier = zoom_multiplier_target;
-
-		flt zoom_delta = 0;
-		flt scroll_delta = 0;
-		(ctrl_down ? zoom_delta : scroll_delta) = (flt)mouse_wheel_diff;
-
-		static flt zoom_multiplier_anim_start;
-		static int zoom_anim_frames_remain = 0;
-		static int anim_frames = 4;
-		ImGui::InputInt("anim_frames", &anim_frames);
-
-		if (zoom_delta != 0) {
-			flt zoom_level = log2f(zoom_multiplier_target);
-			
-			zoom_multiplier_anim_start = zoom_multiplier;
-			zoom_multiplier_target = powf(2.0f, zoom_level +zoom_delta / 10);
-			
-			zoom_anim_frames_remain = anim_frames -1; // start with anim t=1 frame instead of t=0 to reduce visual input lag
-		}
-
-		zoom_multiplier = lerp(zoom_multiplier_anim_start, zoom_multiplier_target, (flt)(anim_frames -zoom_anim_frames_remain) / anim_frames);
-
-		if (zoom_anim_frames_remain != 0)
-			zoom_anim_frames_remain--;
-
-		v2 cell_sz = 300 * zoom_multiplier;
-
-		flt scroll_px = (flt)-0 * 150;
-
-		iv2 grid_sz = disp.dim -iv2(left_bar_size, 0);
-
-		int columns = (int)floor((flt)grid_sz.x / cell_sz.x);
-
-		iv2 cell = 0;
-
-		for (auto* c : dir->content) {
-			Texture2D* tex = nullptr;
-			
-			if (dynamic_cast<Directory_Tree*>(c)) {
-
-				tex = img_cache.query_image_texture("assets_src/folder_icon.png");
-
-			} else if (dynamic_cast<File*>(c)) {
-				
-				auto* file = (File*)c;
-
-				tex = img_cache.query_image_texture(dir->name+file->name);
-				
-			} else {
-				assert_log(false);
-			}
-
-			if (tex) {
-
-				auto img_size = (v2)tex->get_size_px();
-
-				v2 aspect = img_size / max(img_size.x, img_size.y);
-
-				v2 sz_px = (v2)cell_sz * aspect;
-				v2 offs_to_center_px = (cell_sz -sz_px) / 2;
-
-				v2 pos_px = v2((flt)left_bar_size, -scroll_px) +cell_sz * (v2)cell;
-				pos_px += offs_to_center_px;
-
-				draw_textured_quad(pos_px, sz_px, *tex);
-			}
-
-			if (++cell.x == columns) {
-				cell.x = 0;
-				cell.y++;
-			}
-		}
-		#endif
 	}
 
 	struct Solid_Col_Vertex {
@@ -641,7 +597,7 @@ struct App {
 		bind_vbos(shad.get(), vbo);
 		
 		static GLint loc_screen_dim = glGetUniformLocation(shad->prog, "screen_dim");
-		glUniform2f(loc_screen_dim, (flt)disp.dim.x,(flt)disp.dim.y);
+		glUniform2f(loc_screen_dim, (flt)disp.framebuffer_size_px.x,(flt)disp.framebuffer_size_px.y);
 		
 		glBufferData(GL_ARRAY_BUFFER, vbo_data.size() * sizeof(Textured_Vertex), NULL, GL_STREAM_DRAW);
 		glBufferData(GL_ARRAY_BUFFER, vbo_data.size() * sizeof(Textured_Vertex), &vbo_data[0], GL_STREAM_DRAW);
@@ -697,7 +653,7 @@ struct App {
 		bind_vbos(shad.get(), vbo);
 
 		static GLint loc_screen_dim = glGetUniformLocation(shad->prog, "screen_dim");
-		glUniform2f(loc_screen_dim, (flt)disp.dim.x,(flt)disp.dim.y);
+		glUniform2f(loc_screen_dim, (flt)disp.framebuffer_size_px.x,(flt)disp.framebuffer_size_px.y);
 
 		glBufferData(GL_ARRAY_BUFFER, tri.size() * sizeof(Triangle), NULL, GL_STREAM_DRAW);
 		glBufferData(GL_ARRAY_BUFFER, tri.size() * sizeof(Triangle), &tri[0], GL_STREAM_DRAW);
@@ -707,34 +663,54 @@ struct App {
 	}
 
 	void render_all () {
-		using namespace ImGui;
+		static iv2 imgui_left_bar_size = iv2(400, -1);
 
-		SetNextWindowBgAlpha(1);
+		ImGui::SetNextWindowBgAlpha(1);
 
-		SetNextWindowPos({0,0});
-
-		// doen't work, window is not resizable
-		//SetNextWindowSizeConstraints({-1,-1}, {-1,-1},
-		//	[] (ImGuiSizeCallbackData* data) {
-		//		data->DesiredSize.x = data->DesiredSize.y;
-		//	});
-
-		Begin("Protoype GUI", nullptr, ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoTitleBar);
+		ImGui::SetNextWindowPos({0,0});
 		
-		auto wnd_size = GetWindowSize();
-		int left_bar_size = (int)wnd_size.x;
+		if (imgui_left_bar_size.y != disp.framebuffer_size_px.y)
+			ImGui::SetNextWindowSize(ImVec2((flt)imgui_left_bar_size.x, (flt)disp.framebuffer_size_px.y));
 
-		img_cache.async_image_loading();
+		ImGui::Begin("Protoype GUI", nullptr, ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoTitleBar);
+		
+		{
+			bool fullscreen = disp.is_fullscreen;
 
+			ImGui::Checkbox("app_fullscreen", &fullscreen);
+
+			if (do_toggle_fullscreen)
+				fullscreen = !fullscreen;
+			
+			if (fullscreen != disp.is_fullscreen) {
+				disp.toggle_fullscreen();
+			}
+		}
+
+		{
+			auto tmp = ImGui::GetWindowSize();
+			imgui_left_bar_size = (iv2)v2(tmp.x,tmp.y);
+		}
+
+		
 		gui();
-		file_grid(viewed_dir.get(), left_bar_size);
+		img_cache.async_image_loading();
+		file_grid(viewed_dir.get(), imgui_left_bar_size.x);
 
 		//gui_file_tree(viewed_dir.get());
 
-		End();
+		ImGui::Separator();
 
-		SetNextWindowBgAlpha(1);
-		ShowDemoWindow();
+		{
+			static bool show_demo_wnd = false;
+			ImGui::Checkbox("ShowDemoWindow", &show_demo_wnd);
+			if (show_demo_wnd) {
+				ImGui::SetNextWindowBgAlpha(1);
+				ImGui::ShowDemoWindow();
+			}
+		}
+
+		ImGui::End();
 	}
 	
 	bool frame () {
@@ -745,19 +721,19 @@ struct App {
 		v2 mouse_pos_01_bottom_up;
 		{ // get syncronous input
 			// display
-			glfwGetFramebufferSize(disp.wnd, &disp.dim.x, &disp.dim.y);
+			glfwGetFramebufferSize(disp.window, &disp.framebuffer_size_px.x, &disp.framebuffer_size_px.y);
 			// mouse
 			f64 x, y;
-			glfwGetCursorPos(disp.wnd, &x, &y);
+			glfwGetCursorPos(disp.window, &x, &y);
 			mouse_pos_px = iv2((int)x, (int)y);
-			mouse_pos_01_bottom_up = ((v2)mouse_pos_px +0.5f) / (v2)disp.dim;
+			mouse_pos_01_bottom_up = ((v2)mouse_pos_px +0.5f) / (v2)disp.framebuffer_size_px;
 			mouse_pos_01_bottom_up.y = 1 -mouse_pos_01_bottom_up.y;
 		}
 
-		if (glfwWindowShouldClose(disp.wnd))
+		if (glfwWindowShouldClose(disp.window))
 			return true;
 
-		imgui_ctx.begin_frame(disp.dim, 1.0f/60, mouse_pos_px, real_lmb_down, real_rmb_down, mouse_wheel_diff);
+		imgui_context.begin_frame(disp.framebuffer_size_px, 1.0f/60, mouse_pos_px, real_lmb_down, real_rmb_down, mouse_wheel_diff);
 
 		mouse_wheel_diff = ImGui::GetIO().WantCaptureMouse ? 0 : mouse_wheel_diff;
 		lmb.new_state( ImGui::GetIO().WantCaptureMouse ? false : real_lmb_down ); // does this produce wrong edge cases?
@@ -766,20 +742,20 @@ struct App {
 		// render gui
 		glDisable(GL_SCISSOR_TEST);
 
-		glViewport(0,0, disp.dim.x,disp.dim.y);
+		glViewport(0,0, disp.framebuffer_size_px.x,disp.framebuffer_size_px.y);
 
 		glClearColor(0,0,0,1);
 		glClear(GL_COLOR_BUFFER_BIT);
 
 		render_all();
 
-		imgui_ctx.draw(disp.dim);
+		imgui_context.draw(disp.framebuffer_size_px);
 
 
 		draw_triangles_solid(overlay_tris);
 
 		// display to screen
-		glfwSwapBuffers(disp.wnd);
+		glfwSwapBuffers(disp.window);
 
 		++frame_i;
 		return false;
@@ -794,25 +770,28 @@ void glfw_refresh_callback (GLFWwindow* window) {
 
 int main (int argc, char** argv) {
 	
-	app.disp = init_engine();
+	init_engine();
 
-	glfwSetWindowRefreshCallback(app.disp.wnd, glfw_refresh_callback);
+	glfwSetWindowRefreshCallback(disp.window, glfw_refresh_callback);
 
-	app.imgui_ctx.init();
-
+	imgui_context.init();
+	
 	app.init();
 
 	// Controls
 	for (;;) {
 		
 		mouse_wheel_diff = 0;
+		do_toggle_fullscreen = false;
 
 		glfwPollEvents(); // calls async input callbacks
 		
 		if (app.frame()) break;
 	}
 
-	glfwDestroyWindow(app.disp.wnd);
+	disp.save_window_positioning();
+
+	glfwDestroyWindow(disp.window);
 	glfwTerminate();
 
 	return 0;

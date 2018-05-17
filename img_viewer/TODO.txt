@@ -18,3 +18,6 @@ DONE:
 
  added actual async disk-to-ram loading of full size images using a thread pool
  -> really cool, and worked without any problems
+
+ implemented fullscreen toggle
+ implemented window placement saving and restore when restarting app

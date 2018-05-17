@@ -92,15 +92,76 @@ void glfw_mouse_scroll (GLFWwindow* window, double xoffset, double yoffset) {
 void glfw_key_event (GLFWwindow* window, int key, int scancode, int action, int mods);
 void glfw_char_event (GLFWwindow* window, unsigned int codepoint, int mods);
 
-struct Display {
-	GLFWwindow*	wnd;
-	iv2			dim;
-};
+#include "saving_struct_as_file.hpp"
 
-static Display init_engine () {
+struct Display {
+	GLFWwindow*		window = nullptr;
+	GLFWmonitor*	fullscreen_monitor = nullptr;
+
+	bool			is_fullscreen;
+
+	struct Window_Placement {
+		iv2			size_px = iv2(1280, 720);
+		iv2			pos_px = -1;
+
+		void get_current (GLFWwindow* window) {
+			glfwGetWindowSize(window, &size_px.x,&size_px.y);
+			glfwGetWindowPos(window, &pos_px.x,&pos_px.y);
+		}
+	} windowed_placement; // just to be able to restore the window placement later when switching to fullscreen, does not actually store the current placement while in windowed mode
+
+	iv2				framebuffer_size_px = 0;
+
+	void toggle_fullscreen () {
+		if (!is_fullscreen) {
+			
+			windowed_placement.get_current(window);
+
+			GLFWvidmode const* mode = glfwGetVideoMode(fullscreen_monitor);
+			glfwSetWindowMonitor(window, fullscreen_monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+
+		} else {
+			glfwSetWindowMonitor(window, NULL, windowed_placement.pos_px.x,windowed_placement.pos_px.y, windowed_placement.size_px.x,windowed_placement.size_px.y, 0);
+
+		}
+
+		is_fullscreen = !is_fullscreen;
+	}
+
+	void save_window_positioning () {
+		
+		if (is_fullscreen) {
+			// windowed_placement currently stores the windowed_placement before switching to fullscreen, this is the one we want to restore on next app launch, since we always start in windowed mode
+		} else {
+			windowed_placement.get_current(window);
+		}
+
+		if (!write_struct_to_file("saves/window_placement.bin", &windowed_placement, sizeof(windowed_placement))) {
+			fprintf(stderr, "Could not save window_placement to saves/window_placement.bin, window position and size won't be restored on the next launch of this app.");
+		}
+	}
+	bool load_window_positioning () {
+		return load_struct_from_file("saves/window_placement.bin", &windowed_placement, sizeof(windowed_placement));
+	}
+} disp;
+
+
+void init_engine () {
 	glfwSetErrorCallback(glfw_error_proc);
 
 	assert_log(glfwInit() != 0, "glfwInit() failed");
+
+	{
+		int count;
+		GLFWmonitor** monitors = glfwGetMonitors(&count);
+
+		if (monitors)
+			disp.fullscreen_monitor = monitors[0];
+	}
+
+	disp.load_window_positioning();
+	
+	disp.is_fullscreen = false; // always start in windowed mode
 
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -110,16 +171,18 @@ static Display init_engine () {
 
 	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, 1);
 
-	Display disp = {};
-	disp.wnd = glfwCreateWindow(1280, 720, u8"2D Game", NULL, NULL);
+	disp.window = glfwCreateWindow(disp.windowed_placement.size_px.x,disp.windowed_placement.size_px.y, u8"2D Game", NULL, NULL);
 
+	if (all(disp.windowed_placement.pos_px > -1)) {
+		glfwSetWindowPos(disp.window, disp.windowed_placement.pos_px.x,disp.windowed_placement.pos_px.y);
+	}
 
-	glfwSetKeyCallback(disp.wnd,			glfw_key_event);
-	glfwSetCharModsCallback(disp.wnd,		glfw_char_event);
-	glfwSetMouseButtonCallback(disp.wnd,	glfw_mouse_button_event);
-	glfwSetScrollCallback(disp.wnd,			glfw_mouse_scroll);
+	glfwSetKeyCallback(disp.window,			glfw_key_event);
+	glfwSetCharModsCallback(disp.window,		glfw_char_event);
+	glfwSetMouseButtonCallback(disp.window,	glfw_mouse_button_event);
+	glfwSetScrollCallback(disp.window,			glfw_mouse_scroll);
 
-	glfwMakeContextCurrent(disp.wnd);
+	glfwMakeContextCurrent(disp.window);
 	gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
 
 	if (GLAD_GL_ARB_debug_output) {
@@ -136,5 +199,4 @@ static Display init_engine () {
 		glBindVertexArray(vao);
 	}
 
-	return disp;
 }

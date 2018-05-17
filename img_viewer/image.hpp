@@ -47,15 +47,24 @@ public:
 		free(pixels);
 	}
 	
-	int get_pixel_size () {
+	int get_pixel_size () const {
 		return sizeof(*pixels);
 	}
-	uptr get_row_size () {
+	uptr get_row_size () const {
 		return (uptr)size.x * (uptr)get_pixel_size();
 	}
-	uptr calc_size () {
+	uptr calc_size () const {
 		return (uptr)size.y * get_row_size();
 	}
+
+	rgba8& get_pixel (int x, int y) {					return pixels[y * get_row_size() +x]; }
+	rgba8 const& get_pixel (int x, int y) const {		return pixels[y * get_row_size() +x]; }
+
+	rgba8& get_pixel (iv2 p) {							return get_pixel(p.x,p.y); }
+	rgba8 const& get_pixel (iv2 p) const {				return get_pixel(p.x,p.y); }
+
+	rgba8& get_nearest_pixel_uv (v2 uv) {				return get_pixel((iv2)(uv * (v2)size)); }
+	rgba8 const& get_nearest_pixel_uv (v2 uv) const {	return get_pixel((iv2)(uv * (v2)size)); }
 
 	static Image2D allocate (iv2 size) {
 		Image2D img;
@@ -94,6 +103,19 @@ public:
 				std::swap(row_a[i], row_b[i]);
 			}
 		}
+	}
+
+	static Image2D dumb_fast_downsize (Image2D const& src, iv2 new_size) {
+		
+		auto dst = Image2D::allocate(new_size);
+
+		for (int y=0; y<new_size.y; ++y) {
+			for (int x=0; x<new_size.x; ++x) {
+				dst.get_pixel(x,y) = src.get_nearest_pixel_uv( (v2)iv2(x,y) / (v2)src.size +0.5f );
+			}
+		}
+
+		return std::move(dst);
 	}
 };
 void swap (Image2D& l, Image2D& r) {
