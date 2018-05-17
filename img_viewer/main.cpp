@@ -165,7 +165,7 @@ struct App {
 		void init_thread_pool () {
 			u32 cpu_threads = std::thread::hardware_concurrency();
 			
-			u32 threads = max(cpu_threads / 2, 2u);
+			u32 threads = max(cpu_threads -1, 2u);
 
 			for (u32 i=0; i<threads; ++i) {
 				img_loader_threads.emplace_back( &Image_Cache::img_loader_thread_pool_thread, this, i );
@@ -200,10 +200,14 @@ struct App {
 		void async_image_loading () {
 			
 			if (ImGui::CollapsingHeader("Image_Cache", ImGuiTreeNodeFlags_DefaultOpen)) {
+				ImGui::Value("threadpool threads", (int)img_loader_threads.size());
+				
 				ImGui::Value_Bytes("cpu_memory_size", cpu_memory_size);
 				ImGui::Value_Bytes("gpu_memory_size", gpu_memory_size);
 			}
 			
+			f64 uploading_begin = glfwGetTime();
+
 			for (;;) {
 				
 				Img_Loader_Threadpool_Result res;
@@ -233,6 +237,9 @@ struct App {
 
 					tmp.currently_async_loading = false;
 				}
+
+				if (glfwGetTime() -uploading_begin > 0.005)
+					break; // stop uploading if uploading has already taken longer than timeout
 			}
 		}
 
@@ -417,17 +424,32 @@ struct App {
 		static v2 view_offs = 0;
 
 		if (ImGui::CollapsingHeader("file_grid", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::DragInt("zoom_smoothing_frames", &zoom_smoothing_frames, 1.0f / 40);
-			ImGui::DragFloat("zoom_step", &zoom_step, 0.01f / 40);
-
-			ImGui::DragInt("zoom_anim_frames_remain", &zoom_smoothing_frames_remain);
-			ImGui::DragFloat("zoom_multiplier_target", &zoom_multiplier_target);
-			ImGui::DragFloat("zoom_multiplier", &zoom_multiplier);
-
-			ImGui::DragFloat("debug_view_size_multiplier", &debug_view_size_multiplier, 1.0f/300, 0.01f);
-		
-			ImGui::DragFloat("view_coord", &view_coord, 1.0f / 50);
-			ImGui::DragFloat2("view_offs", &view_offs.x, 1.0f / 50);
+			
+			// This allows me to save one of the following options shown through imgui to be saved to disk and automaticly loaded on the next start of the app (i love how crazy powerful coding like this can be!)
+			#define IMGUI_SAVABLE_DRAGT(T, id, valptr, ...) do {											\
+					if (frame_i == 0)																		\
+						load_fixed_size_binary_file("saves/imgui/" id ".bin", valptr, sizeof(*valptr));		\
+																											\
+					bool save = ImGui::Button("##" id);														\
+																											\
+					ImGui::SameLine();																		\
+					ImGui::T(id, valptr, __VA_ARGS__);														\
+																											\
+					if (save)																				\
+						write_fixed_size_binary_file("saves/imgui/" id ".bin", valptr, sizeof(*valptr));	\
+				} while(0)
+			
+			IMGUI_SAVABLE_DRAGT( DragInt,	"zoom_smoothing_frames", &zoom_smoothing_frames, 1.0f / 40);
+			IMGUI_SAVABLE_DRAGT( DragFloat,	"zoom_step", &zoom_step, 0.01f / 40);
+			
+			IMGUI_SAVABLE_DRAGT( DragInt,	"zoom_anim_frames_remain", &zoom_smoothing_frames_remain);
+			IMGUI_SAVABLE_DRAGT( DragFloat,	"zoom_multiplier_target", &zoom_multiplier_target);
+			IMGUI_SAVABLE_DRAGT( DragFloat,	"zoom_multiplier", &zoom_multiplier);
+			
+			IMGUI_SAVABLE_DRAGT( DragFloat,	"debug_view_size_multiplier", &debug_view_size_multiplier, 1.0f/300, 0.01f);
+			
+			IMGUI_SAVABLE_DRAGT( DragFloat,	"view_coord", &view_coord, 1.0f / 50);
+			IMGUI_SAVABLE_DRAGT( DragFloat2, "view_offs", &view_offs.x, 1.0f / 50);
 		}
 
 		for (int content_i=0; content_i<(dir ? (int)dir->content.size() : 0); content_i++) {

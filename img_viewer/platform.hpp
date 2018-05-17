@@ -92,8 +92,6 @@ void glfw_mouse_scroll (GLFWwindow* window, double xoffset, double yoffset) {
 void glfw_key_event (GLFWwindow* window, int key, int scancode, int action, int mods);
 void glfw_char_event (GLFWwindow* window, unsigned int codepoint, int mods);
 
-#include "saving_struct_as_file.hpp"
-
 struct Display {
 	GLFWwindow*		window = nullptr;
 	GLFWmonitor*	fullscreen_monitor = nullptr;
@@ -136,12 +134,12 @@ struct Display {
 			windowed_placement.get_current(window);
 		}
 
-		if (!write_struct_to_file("saves/window_placement.bin", &windowed_placement, sizeof(windowed_placement))) {
+		if (!write_fixed_size_binary_file("saves/window_placement.bin", &windowed_placement, sizeof(windowed_placement))) {
 			fprintf(stderr, "Could not save window_placement to saves/window_placement.bin, window position and size won't be restored on the next launch of this app.");
 		}
 	}
 	bool load_window_positioning () {
-		return load_struct_from_file("saves/window_placement.bin", &windowed_placement, sizeof(windowed_placement));
+		return load_fixed_size_binary_file("saves/window_placement.bin", &windowed_placement, sizeof(windowed_placement));
 	}
 } disp;
 
