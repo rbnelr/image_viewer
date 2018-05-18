@@ -248,14 +248,16 @@ struct App {
 
 				f32 elapsed = (f32)(glfwGetTime() -uploading_begin);
 
-				static f32 max_upload_elapsed = -INF;
-				max_upload_elapsed = max(max_upload_elapsed, elapsed);
-
-				ImGui::Value("max_upload_elapsed", max_upload_elapsed);
-
 				if (elapsed > 0.005f)
 					break; // stop uploading if uploading has already taken longer than timeout
 			}
+
+			f32 upload_elapsed = (f32)(glfwGetTime() -uploading_begin);
+			
+			static f32 max_upload_elapsed = -INF;
+			max_upload_elapsed = max(max_upload_elapsed, upload_elapsed);
+			
+			ImGui::Value("max_upload_elapsed (ms)", max_upload_elapsed * 1000);
 		}
 
 		void clear () {
@@ -438,6 +440,12 @@ struct App {
 		static flt view_coord = 48;//(flt)(dir ? (int)dir->content.size() : 0) / 2;
 		static v2 view_offs = 0;
 
+		static flt loading_icon_fullsz_sz = 0.70f;
+		static flt loading_icon_fullsz_alpha = 0.12f;
+
+		static flt loading_icon_overlay_sz = 0.25f;
+		static flt loading_icon_overlay_alpha = 0.8f;
+		
 		if (ImGui::CollapsingHeader("file_grid", ImGuiTreeNodeFlags_DefaultOpen)) {
 			
 			// This allows me to save one of the following options shown through imgui to be saved to disk and automaticly loaded on the next start of the app (i love how crazy powerful coding like this can be!)
@@ -465,7 +473,14 @@ struct App {
 			
 			IMGUI_SAVABLE_DRAGT( DragFloat,	"view_coord", &view_coord, 1.0f / 50);
 			IMGUI_SAVABLE_DRAGT( DragFloat2, "view_offs", &view_offs.x, 1.0f / 50);
+
+			ImGui::DragFloat("loading_icon_fullsz_sz", &loading_icon_fullsz_sz, 0.01f);
+			ImGui::DragFloat("loading_icon_fullsz_alpha", &loading_icon_fullsz_alpha, 0.01f);
+
+			ImGui::DragFloat("loading_icon_overlay_sz", &loading_icon_overlay_sz, 0.01f);
+			ImGui::DragFloat("loading_icon_overlay_alpha", &loading_icon_overlay_alpha, 0.01f);
 		}
+
 
 		for (int content_i=0; content_i<(dir ? (int)dir->content.size() : 0); content_i++) {
 			auto img_instance = [&] (v2 pos_center_rel, flt alpha) {
@@ -487,11 +502,6 @@ struct App {
 					auto* file = (File*)c;
 
 					tex = img_cache.query_image_texture(dir->name+file->name);
-
-					if (!tex) {
-						tex = tex_loading_icon.get();
-						alpha *= 0.2f;
-					}
 				} else {
 					assert_log(false);
 				}
@@ -508,6 +518,9 @@ struct App {
 					pos_px += offs_to_center_px;
 
 					draw_textured_quad(pos_px, sz_px, *tex, rgba8(255,255,255, (u8)(alpha * 255 +0.5f)));
+				} else {
+					v2 pos_px = view_center +pos_center_rel_px +cell_sz * (-0.5f +(1 -loading_icon_fullsz_sz)/2);
+					draw_textured_quad(pos_px, cell_sz * loading_icon_fullsz_sz, *tex_loading_icon.get(), rgba8(255,255,255, (int)(loading_icon_fullsz_alpha * 255.0f +0.5f)));
 				}
 			};
 
