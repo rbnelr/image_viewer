@@ -74,9 +74,8 @@ struct MButton {
 };
 
 #include <map>
-#include <thread>
 
-#include "threadsafe_queue.hpp"
+#include "threadpool.hpp"
 
 struct App {
 	int				frame_i = 0;
@@ -130,8 +129,6 @@ struct App {
 		u64 cpu_memory_size = 0;
 		u64 gpu_memory_size = 0; // this might not be accurate, since we can't be sure of the gpu texel format
 
-		std::vector< std::thread >	img_loader_threads;
-
 		struct Img_Loader_Threadpool_Job { // input is filepath to file to load
 			string	filepath;
 		};
@@ -140,40 +137,34 @@ struct App {
 			Image2D	full_src_img;
 		};
 
-		threadsafe_queue<Img_Loader_Threadpool_Job>		img_loader_jobs;
-		threadsafe_queue<Img_Loader_Threadpool_Result>	img_loader_results;
-		
-		void img_loader_thread_pool_thread (u32 thread_indx) {
-			for (;;) {
-				Img_Loader_Threadpool_Job job = std::move( img_loader_jobs.pop() );
-
+		struct Img_Loader_Threadpool_Processor {
+			static Img_Loader_Threadpool_Result process_job (Img_Loader_Threadpool_Job&& job) {
 				Img_Loader_Threadpool_Result res;
+
 				res.filepath = job.filepath;
 
 				// load image from disk
 				try {
 					res.full_src_img = Image2D::load_from_file(job.filepath);
+
+					//res.full_src_img = Image2D::dumb_fast_downsize(res.full_src_img, res.full_src_img.size / 4);
+
 				} catch (Expt_File_Load_Fail const& e) {
 					//assert_log(false, e.what()); // is not threadsafe!
 					// res.full_src_img is still null (by which i mean default constructed) -> signifies that image was not loaded
 				}
 
-				img_loader_results.push( std::move(res) );
+				return res;
 			}
-		}
+		};
+
+		Threadpool<Img_Loader_Threadpool_Job, Img_Loader_Threadpool_Result, Img_Loader_Threadpool_Processor> img_loader_threadpool;
 
 		void init_thread_pool () {
-			u32 cpu_threads = std::thread::hardware_concurrency();
+			int cpu_threads = (int)std::thread::hardware_concurrency();
+			int threads = max(cpu_threads -1, 2);
 			
-			u32 threads = max(cpu_threads -1, 2u);
-
-			for (u32 i=0; i<threads; ++i) {
-				img_loader_threads.emplace_back( &Image_Cache::img_loader_thread_pool_thread, this, i );
-			}
-		}
-		~Image_Cache () {
-			for (auto& t : img_loader_threads)
-				t.detach(); // don't want to wait for processing to finish, we could only ever leak open file handles (i think), but we want to exit the app after this anyway
+			img_loader_threadpool.start_threads(threads);
 		}
 
 		Texture2D* query_image_texture (strcr filepath) {
@@ -186,7 +177,7 @@ struct App {
 				// not cached yet
 				auto img = make_unique<Image>();
 
-				img_loader_jobs.push({filepath});
+				img_loader_threadpool.jobs.push({filepath});
 
 				img->currently_async_loading = true;
 			
@@ -197,13 +188,30 @@ struct App {
 			}
 		}
 
-		void async_image_loading () {
+		void async_image_loading (int frame_i) {
 			
 			if (ImGui::CollapsingHeader("Image_Cache", ImGuiTreeNodeFlags_DefaultOpen)) {
-				ImGui::Value("threadpool threads", (int)img_loader_threads.size());
+				ImGui::Value("threadpool threads", img_loader_threadpool.get_thread_count());
 				
 				ImGui::Value_Bytes("cpu_memory_size", cpu_memory_size);
 				ImGui::Value_Bytes("gpu_memory_size", gpu_memory_size);
+
+
+				static f32 sz_in_mb[256] = {};
+				static int cur_val = 0;
+
+				if (frame_i % 1 == 0) {
+					sz_in_mb[cur_val++] = (flt)cpu_memory_size / 1024 / 1024;
+					cur_val %= ARRLEN(sz_in_mb);
+				}
+
+				static flt range = 1024*6;
+				ImGui::DragFloat("##cpu_memory_size_plot_range", &range, 10);
+
+				ImGui::PushItemWidth(-1);
+				ImGui::PlotLines("##cpu_memory_size", sz_in_mb, ARRLEN(sz_in_mb), cur_val, "cpu_memory_size in MB", 0, range, ImVec2(0,80));
+				ImGui::PopItemWidth();
+
 			}
 			
 			f64 uploading_begin = glfwGetTime();
@@ -211,7 +219,7 @@ struct App {
 			for (;;) {
 				
 				Img_Loader_Threadpool_Result res;
-				if (!img_loader_results.try_pop(&res))
+				if (!img_loader_threadpool.results.try_pop(&res))
 					break; // currently no images loaded async, stop polling
 
 				if (res.full_src_img.pixels == nullptr) {
@@ -238,7 +246,14 @@ struct App {
 					tmp.currently_async_loading = false;
 				}
 
-				if (glfwGetTime() -uploading_begin > 0.005)
+				f32 elapsed = (f32)(glfwGetTime() -uploading_begin);
+
+				static f32 max_upload_elapsed = -INF;
+				max_upload_elapsed = max(max_upload_elapsed, elapsed);
+
+				ImGui::Value("max_upload_elapsed", max_upload_elapsed);
+
+				if (elapsed > 0.005f)
 					break; // stop uploading if uploading has already taken longer than timeout
 			}
 		}
@@ -716,7 +731,7 @@ struct App {
 
 		
 		gui();
-		img_cache.async_image_loading();
+		img_cache.async_image_loading(frame_i);
 		file_grid(viewed_dir.get(), imgui_left_bar_size.x);
 
 		//gui_file_tree(viewed_dir.get());

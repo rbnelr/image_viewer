@@ -28,7 +28,7 @@ namespace ImGui {
 	}
 	IMGUI_API void Value_Bytes (const char* prefix, u64 i) {
 		cstr unit;
-		u64 val = i;
+		f32 val = (f32)i;
 		if (		i < ((u64)1024) ) {
 			val /= (u64)1;
 			unit = "B";
@@ -48,7 +48,7 @@ namespace ImGui {
 			val /= (u64)1024*1024*1024*1024*1024;
 			unit = "PB";
 		}
-		Text("%s: %lld %s", prefix, val, unit);
+		Text("%s: %.2f %s", prefix, val, unit);
 	}
 
 	IMGUI_API bool InputText_str (const char* label, std::string* s, ImGuiInputTextFlags flags = 0, ImGuiTextEditCallback callback = NULL, void* user_data = NULL) {

@@ -57,8 +57,8 @@ public:
 		return (uptr)size.y * get_row_size();
 	}
 
-	rgba8& get_pixel (int x, int y) {					return pixels[y * get_row_size() +x]; }
-	rgba8 const& get_pixel (int x, int y) const {		return pixels[y * get_row_size() +x]; }
+	rgba8& get_pixel (int x, int y) {					return pixels[y * size.x +x]; }
+	rgba8 const& get_pixel (int x, int y) const {		return pixels[y * size.x +x]; }
 
 	rgba8& get_pixel (iv2 p) {							return get_pixel(p.x,p.y); }
 	rgba8 const& get_pixel (iv2 p) const {				return get_pixel(p.x,p.y); }
@@ -111,7 +111,7 @@ public:
 
 		for (int y=0; y<new_size.y; ++y) {
 			for (int x=0; x<new_size.x; ++x) {
-				dst.get_pixel(x,y) = src.get_nearest_pixel_uv( (v2)iv2(x,y) / (v2)src.size +0.5f );
+				dst.get_pixel(x,y) = src.get_nearest_pixel_uv( ((v2)iv2(x,y) +0.5f) / (v2)new_size );
 			}
 		}
 
