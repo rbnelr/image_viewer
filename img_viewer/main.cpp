@@ -77,9 +77,245 @@ struct MButton {
 
 #include "threadpool.hpp"
 
-struct App {
-	int				frame_i = 0;
+int	frame_i = 0;
 
+struct Texture_Streamer {
+
+	struct Cached_Texture {
+		Texture2D	tex;
+
+		iv2			size_px;
+		bool		currently_async_loading; // loading async via threadpool
+
+		int			not_queried_for_n_frames;
+	};
+
+	std::map< str, unique_ptr<Cached_Texture> >	textures; // key: filepath
+
+	u64 memory_size = 0; // how many bytes of texture data we currently have uploaded
+
+	struct Img_Loader_Threadpool_Job { // input is filepath to file to load
+		string	filepath;
+		iv2		size_px;
+	};
+	struct Img_Loader_Threadpool_Result {
+		string	filepath;
+		Image2D	src_img;
+	};
+
+	struct Img_Loader_Threadpool_Processor {
+		static Img_Loader_Threadpool_Result process_job (Img_Loader_Threadpool_Job&& job) {
+			Img_Loader_Threadpool_Result res;
+
+			res.filepath = job.filepath;
+
+			// load image from disk
+			try {
+				res.src_img = Image2D::load_from_file(job.filepath);
+
+				res.src_img = Image2D::dumb_fast_downsize(res.src_img, job.size_px);
+
+			} catch (Expt_File_Load_Fail const& e) {
+				//assert_log(false, e.what()); // is not threadsafe!
+				// res.full_src_img is still null (by which i mean default constructed) -> signifies that image was not loaded
+			}
+
+			return res;
+		}
+	};
+
+	Threadpool<Img_Loader_Threadpool_Job, Img_Loader_Threadpool_Result, Img_Loader_Threadpool_Processor> img_loader_threadpool;
+
+	void init_thread_pool () {
+		int cpu_threads = (int)std::thread::hardware_concurrency();
+		int threads = max(cpu_threads -1, 2);
+
+		img_loader_threadpool.start_threads(threads);
+	}
+
+	u64 get_memory_size (Cached_Texture const& t) {
+		auto sz = t.tex.get_size_px();
+		return sz.y * sz.x * sizeof(rgba8);
+	}
+
+	Cached_Texture* find_texture (string const& filepath) {
+		auto it = textures.find(filepath);
+		return it != textures.end() ? it->second.get() : nullptr;
+	}
+	void evict_texture (decltype(textures)::iterator it) {
+		memory_size -= get_memory_size(*it->second);
+		textures.erase(it);
+	}
+
+	void begin_frame () {
+		for (auto& t : textures) {
+			t.second->not_queried_for_n_frames++;
+		}
+	}
+	void end_frame () {
+		for (auto it=textures.begin(), next_it=textures.begin(); it!=textures.end(); it=next_it) {
+			next_it = it; ++next_it;
+			if (it->second->not_queried_for_n_frames != 0)
+				evict_texture(it);
+		}
+	}
+
+	Texture2D* query_image_texture (strcr filepath, iv2 size_px) {
+		
+		auto* tex = find_texture(filepath);
+		
+		bool correct_size_cached = tex && all(tex->size_px == size_px);
+
+		if (correct_size_cached) {
+			tex->not_queried_for_n_frames = 0;
+			return tex->currently_async_loading ? nullptr : &tex->tex;
+		}
+
+		if (tex && !correct_size_cached) {
+			evict_texture(textures.find(filepath));
+		}
+
+		// not cached yet
+		auto img = make_unique<Cached_Texture>();
+
+		img_loader_threadpool.jobs.push({filepath, size_px});
+
+		img->size_px = size_px;
+		img->currently_async_loading = true;
+
+		auto ret = textures.emplace(filepath, std::move(img));
+		assert_log(ret.second);
+
+		return nullptr; // just started loading async
+	}
+
+	void async_image_loading (int frame_i) {
+
+		if (ImGui::CollapsingHeader("Texture_Streamer", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::Value("threadpool threads", img_loader_threadpool.get_thread_count());
+
+			ImGui::Value_Bytes("memory_size", memory_size);
+
+
+			static f32 sz_in_mb[256] = {};
+			static int cur_val = 0;
+
+			if (frame_i % 1 == 0) {
+				sz_in_mb[cur_val++] = (flt)memory_size / 1024 / 1024;
+				cur_val %= ARRLEN(sz_in_mb);
+			}
+
+			static flt range = 1024*6;
+			ImGui::DragFloat("memory_size_plot_range", &range, 10);
+
+			ImGui::PushItemWidth(-1);
+			ImGui::PlotLines("##memory_size", sz_in_mb, ARRLEN(sz_in_mb), cur_val, "memory_size in MB", 0, range, ImVec2(0,80));
+			ImGui::PopItemWidth();
+			
+			static bool show_image_loader_threadpool_jobs = false;
+			show_image_loader_threadpool_jobs = ImGui::Button("show_image_loader_threadpool_jobs") || show_image_loader_threadpool_jobs;
+			
+			if (show_image_loader_threadpool_jobs) {
+				ImGui::Begin("Texture_Streamer image loader threadpool jobs", &show_image_loader_threadpool_jobs);
+				
+				static ImGuiTextFilter filter;
+				filter.Draw();
+
+				auto foreach_job = [] (Img_Loader_Threadpool_Job const& job) {
+					if (!filter.PassFilter(job.filepath.c_str()))
+						return;
+
+					ImGui::Text(job.filepath.c_str());
+					ImGui::SameLine();
+					ImGui::Value("sz", job.size_px);
+				};
+
+				static bool order = false;
+
+				ImGui::SameLine();
+				ImGui::Checkbox("Order: checked: top==next to be popped  unchecked: top==most recently pushed", &order);
+				
+				if (order) {
+					img_loader_threadpool.jobs.iterate_queue_back_to_front(foreach_job);
+				} else {
+					img_loader_threadpool.jobs.iterate_queue_front_to_back(foreach_job);
+				}
+
+				ImGui::End();
+			}
+		}
+
+		auto job_still_needed = [&] (Cached_Texture const* tex, iv2 job_tex_size_px) {
+			if (!tex) { // texture is not in our list of textures (was evicted while still async loading?)
+				return false;
+			} else if (any(tex->size_px != job_tex_size_px)) { // texture is not the correct size (desired size changed while still async loading? -> both sizes are queued threadpool at the same time)
+				return false;
+			} else if (!tex->currently_async_loading) { // texture is the correct size but was already completed (i think this can happen when: query(sz:5x5), query(sz:6x6), query(sz:5x5) -> tex->size==5x5 but there are two versions of 5x5 in queue)
+				return false;
+			} else {
+				return true;
+			}
+		};
+
+		auto need_to_cancel_job = [&] (Img_Loader_Threadpool_Job const& job) {
+			auto* tex = find_texture(job.filepath);
+			return !job_still_needed(tex, job.size_px);
+		};
+
+		img_loader_threadpool.jobs.cancel(need_to_cancel_job);
+
+		f64 uploading_begin = glfwGetTime();
+
+		for (;;) {
+
+			Img_Loader_Threadpool_Result res;
+			if (!img_loader_threadpool.results.try_pop(&res))
+				break; // currently no images loaded async, stop polling
+
+			if (res.src_img.pixels == nullptr) {
+				// image could not be loaded, simply pretend it never finished loading for development purposes
+			} else {
+				auto* tex = find_texture(res.filepath);
+				if (!job_still_needed(tex, res.src_img.size)) {
+					// Ignore result
+				} else {
+					// create texture from image by uploading
+
+					tex->tex = Texture2D::generate();
+					tex->tex.upload( res.src_img.pixels, res.src_img.size );
+
+					//tex->tex.gen_mipmaps();
+					tex->tex.set_filtering_mipmapped();
+					tex->tex.set_border_clamp();
+				
+					memory_size += get_memory_size(*tex);
+
+					tex->currently_async_loading = false;
+				}
+			}
+
+			f32 elapsed = (f32)(glfwGetTime() -uploading_begin);
+
+			if (elapsed > 0.005f)
+				break; // stop uploading if uploading has already taken longer than timeout
+		}
+
+		f32 upload_elapsed = (f32)(glfwGetTime() -uploading_begin);
+
+		static f32 max_upload_elapsed = -INF;
+		max_upload_elapsed = max(max_upload_elapsed, upload_elapsed);
+
+		ImGui::Value("max_upload_elapsed (ms)", max_upload_elapsed * 1000);
+	}
+
+	void clear () {
+		textures.clear();
+
+		memory_size = 0;
+	}
+};
+
+struct App {
 	//icol			bg_col =		irgb(41,49,52);
 	
 	MButton			lmb =	 {0,0,0};
@@ -87,6 +323,8 @@ struct App {
 
 	unique_ptr<Texture2D>	tex_folder_icon;
 	unique_ptr<Texture2D>	tex_loading_icon;
+	unique_ptr<Texture2D>	tex_loading_file_icon;
+	unique_ptr<Texture2D>	tex_file_icon;
 
 	static Texture2D create_null_texture () {
 		auto tex = Texture2D::generate();
@@ -101,7 +339,7 @@ struct App {
 		try {
 			img = Image2D::load_from_file(filepath);
 		} catch (Expt_File_Load_Fail const& e) {
-			assert_log(false, e.what());
+			warning_log("%s\n", e.what());
 			return std::move(create_null_texture());
 		}
 
@@ -115,159 +353,6 @@ struct App {
 		return std::move(tex);
 	}
 
-	struct Image_Cache {
-
-		struct Image {
-			Image2D		full_src_img;
-			Texture2D	full_tex;
-
-			bool		currently_async_loading; // loading async via threadpool
-		};
-
-		std::map< str, unique_ptr<Image> >	images; // key: filepath
-
-		u64 cpu_memory_size = 0;
-		u64 gpu_memory_size = 0; // this might not be accurate, since we can't be sure of the gpu texel format
-
-		struct Img_Loader_Threadpool_Job { // input is filepath to file to load
-			string	filepath;
-		};
-		struct Img_Loader_Threadpool_Result {
-			string	filepath;
-			Image2D	full_src_img;
-		};
-
-		struct Img_Loader_Threadpool_Processor {
-			static Img_Loader_Threadpool_Result process_job (Img_Loader_Threadpool_Job&& job) {
-				Img_Loader_Threadpool_Result res;
-
-				res.filepath = job.filepath;
-
-				// load image from disk
-				try {
-					res.full_src_img = Image2D::load_from_file(job.filepath);
-
-					//res.full_src_img = Image2D::dumb_fast_downsize(res.full_src_img, res.full_src_img.size / 4);
-
-				} catch (Expt_File_Load_Fail const& e) {
-					//assert_log(false, e.what()); // is not threadsafe!
-					// res.full_src_img is still null (by which i mean default constructed) -> signifies that image was not loaded
-				}
-
-				return res;
-			}
-		};
-
-		Threadpool<Img_Loader_Threadpool_Job, Img_Loader_Threadpool_Result, Img_Loader_Threadpool_Processor> img_loader_threadpool;
-
-		void init_thread_pool () {
-			int cpu_threads = (int)std::thread::hardware_concurrency();
-			int threads = max(cpu_threads -1, 2);
-			
-			img_loader_threadpool.start_threads(threads);
-		}
-
-		Texture2D* query_image_texture (strcr filepath) {
-			auto it = images.find(filepath);
-			if (it != images.end()) {
-				// already cached or just inserted
-				Image& tmp = *it->second;
-				return tmp.currently_async_loading ? nullptr : &tmp.full_tex;
-			} else {
-				// not cached yet
-				auto img = make_unique<Image>();
-
-				img_loader_threadpool.jobs.push({filepath});
-
-				img->currently_async_loading = true;
-			
-				auto ret = images.emplace(filepath, std::move(img));
-				assert_log(ret.second);
-
-				return nullptr; // just started loading async
-			}
-		}
-
-		void async_image_loading (int frame_i) {
-			
-			if (ImGui::CollapsingHeader("Image_Cache", ImGuiTreeNodeFlags_DefaultOpen)) {
-				ImGui::Value("threadpool threads", img_loader_threadpool.get_thread_count());
-				
-				ImGui::Value_Bytes("cpu_memory_size", cpu_memory_size);
-				ImGui::Value_Bytes("gpu_memory_size", gpu_memory_size);
-
-
-				static f32 sz_in_mb[256] = {};
-				static int cur_val = 0;
-
-				if (frame_i % 1 == 0) {
-					sz_in_mb[cur_val++] = (flt)cpu_memory_size / 1024 / 1024;
-					cur_val %= ARRLEN(sz_in_mb);
-				}
-
-				static flt range = 1024*6;
-				ImGui::DragFloat("##cpu_memory_size_plot_range", &range, 10);
-
-				ImGui::PushItemWidth(-1);
-				ImGui::PlotLines("##cpu_memory_size", sz_in_mb, ARRLEN(sz_in_mb), cur_val, "cpu_memory_size in MB", 0, range, ImVec2(0,80));
-				ImGui::PopItemWidth();
-
-			}
-			
-			f64 uploading_begin = glfwGetTime();
-
-			for (;;) {
-				
-				Img_Loader_Threadpool_Result res;
-				if (!img_loader_threadpool.results.try_pop(&res))
-					break; // currently no images loaded async, stop polling
-
-				if (res.full_src_img.pixels == nullptr) {
-					// image could not be loaded, simply pretend it never finished loading for development purposes
-				} else {
-					// create texture from image by uploading
-					auto it = images.find(res.filepath);
-					assert_log(it != images.end());
-					
-					auto& tmp = *it->second;
-					tmp.full_src_img = std::move( res.full_src_img );
-
-					cpu_memory_size += tmp.full_src_img.calc_size();
-
-					tmp.full_tex = Texture2D::generate();
-					tmp.full_tex.upload( tmp.full_src_img.pixels, tmp.full_src_img.size );
-
-					tmp.full_tex.gen_mipmaps();
-					tmp.full_tex.set_filtering_mipmapped();
-					tmp.full_tex.set_border_clamp();
-
-					gpu_memory_size += tmp.full_src_img.calc_size(); // same as cpu memory size for now
-
-					tmp.currently_async_loading = false;
-				}
-
-				f32 elapsed = (f32)(glfwGetTime() -uploading_begin);
-
-				if (elapsed > 0.005f)
-					break; // stop uploading if uploading has already taken longer than timeout
-			}
-
-			f32 upload_elapsed = (f32)(glfwGetTime() -uploading_begin);
-			
-			static f32 max_upload_elapsed = -INF;
-			max_upload_elapsed = max(max_upload_elapsed, upload_elapsed);
-			
-			ImGui::Value("max_upload_elapsed (ms)", max_upload_elapsed * 1000);
-		}
-
-		void clear () {
-			images.clear();
-
-			cpu_memory_size = 0;
-			gpu_memory_size = 0;
-		}
-	};
-
 	struct Content {
 		str		name;
 
@@ -275,7 +360,11 @@ struct App {
 	};
 
 	struct File : Content {
+		//str	name; // just the file name
+		string	filepath; // the relative or absolute filepath needed to open the file
 		
+		bool	is_image;
+		iv2		size_px;
 	};
 	struct Directory_Tree : Content {
 		//str		name; // for root: full or relative path of directory +'/',  for non-root: directory name +'/'
@@ -286,13 +375,13 @@ struct App {
 		std::vector<Content*>						content;
 	};
 
-	void _populate (Directory_Tree* tree, n_find_files::Directory_Tree const& dir) {
+	void _populate (Directory_Tree* tree, n_find_files::Directory_Tree const& dir, string const& path) {
 		
 		for (auto& d : dir.dirs) {
 			auto subtree = make_unique<Directory_Tree>();
 
 			subtree->name = d.name;
-			_populate(subtree.get(), d);
+			_populate(subtree.get(), d, path+subtree->name);
 
 			tree->content.emplace_back(subtree.get());
 
@@ -301,6 +390,9 @@ struct App {
 		for (auto& fn : dir.filenames) {
 			auto file = make_unique<File>();
 			file->name = fn;
+			file->filepath = path + fn;
+
+			file->is_image = stbi_info(file->filepath.c_str(), &file->size_px.x,&file->size_px.y, nullptr) != 0;
 
 			tree->content.emplace_back(file.get());
 
@@ -308,14 +400,16 @@ struct App {
 		}
 	}
 
-	Image_Cache					img_cache;
+	Texture_Streamer				tex_streamer;
 	unique_ptr<Directory_Tree>	viewed_dir = nullptr;
 
 	void init () {
 		tex_loading_icon = make_unique<Texture2D>( simple_load_texture("assets_src/loading_icon.png") );
+		tex_loading_file_icon = make_unique<Texture2D>( simple_load_texture("assets_src/loading_file_icon.png") );
 		tex_folder_icon = make_unique<Texture2D>( simple_load_texture("assets_src/folder_icon.png") );
+		tex_file_icon = make_unique<Texture2D>( simple_load_texture("assets_src/file_icon.png") );
 
-		img_cache.init_thread_pool();
+		tex_streamer.init_thread_pool();
 	}
 
 	void gui () {
@@ -350,7 +444,7 @@ struct App {
 		if (trigger_load) {
 			load_ok = false;
 			
-			img_cache.clear();
+			tex_streamer.clear();
 			viewed_dir = nullptr;
 			
 			try {
@@ -372,7 +466,7 @@ struct App {
 				viewed_dir = make_unique<Directory_Tree>();
 				viewed_dir->name = viewed_dir_path;
 
-				_populate(viewed_dir.get(), new_dir);
+				_populate(viewed_dir.get(), new_dir, viewed_dir->name);
 
 				load_ok = true;
 
@@ -440,11 +534,11 @@ struct App {
 		static flt view_coord = 48;//(flt)(dir ? (int)dir->content.size() : 0) / 2;
 		static v2 view_offs = 0;
 
-		static flt loading_icon_fullsz_sz = 0.70f;
-		static flt loading_icon_fullsz_alpha = 0.12f;
+		static flt file_icon_sz = 0.70f;
+		static flt file_icon_alpha = 0.12f;
 
-		static flt loading_icon_overlay_sz = 0.25f;
-		static flt loading_icon_overlay_alpha = 0.8f;
+		static flt loading_icon_sz = 0.25f;
+		static flt loading_icon_alpha = 0.8f;
 		
 		if (ImGui::CollapsingHeader("file_grid", ImGuiTreeNodeFlags_DefaultOpen)) {
 			
@@ -474,13 +568,14 @@ struct App {
 			IMGUI_SAVABLE_DRAGT( DragFloat,	"view_coord", &view_coord, 1.0f / 50);
 			IMGUI_SAVABLE_DRAGT( DragFloat2, "view_offs", &view_offs.x, 1.0f / 50);
 
-			ImGui::DragFloat("loading_icon_fullsz_sz", &loading_icon_fullsz_sz, 0.01f);
-			ImGui::DragFloat("loading_icon_fullsz_alpha", &loading_icon_fullsz_alpha, 0.01f);
+			ImGui::DragFloat("file_icon_sz", &file_icon_sz, 0.01f);
+			ImGui::DragFloat("file_icon_alpha", &file_icon_alpha, 0.01f);
 
-			ImGui::DragFloat("loading_icon_overlay_sz", &loading_icon_overlay_sz, 0.01f);
-			ImGui::DragFloat("loading_icon_overlay_alpha", &loading_icon_overlay_alpha, 0.01f);
+			ImGui::DragFloat("loading_icon_sz", &loading_icon_sz, 0.01f);
+			ImGui::DragFloat("loading_icon_alpha", &loading_icon_alpha, 0.01f);
 		}
 
+		tex_streamer.begin_frame();
 
 		for (int content_i=0; content_i<(dir ? (int)dir->content.size() : 0); content_i++) {
 			auto img_instance = [&] (v2 pos_center_rel, flt alpha) {
@@ -491,37 +586,64 @@ struct App {
 				v2 pos_center_rel_px = pos_center_rel * cell_sz;
 
 				auto* c = dir->content[content_i];
-				Texture2D* tex = nullptr;
 
-				if (dynamic_cast<Directory_Tree*>(c)) {
+				auto get_texture_centered_in_cell_onscreen_size = [&] (iv2 img_size_px) { // img_size_px is just used to calc the image aspect ratio, so we can use the full image size to find the actual size onscreen
+					v2 border_px = 5;
 
-					tex = tex_folder_icon.get();
+					auto img_full_size = (v2)img_size_px;
+					v2 aspect = img_full_size / max(img_full_size.x, img_full_size.y);
+					return (v2)cell_sz * aspect -border_px*2;
+				};
+				auto draw_texture_centered_in_cell = [&] (Texture2D const& tex, iv2 img_size_px, flt alpha) {
+					v2 img_onscreen_sz_px = get_texture_centered_in_cell_onscreen_size(img_size_px);
 
-				} else if (dynamic_cast<File*>(c)) {
-
-					auto* file = (File*)c;
-
-					tex = img_cache.query_image_texture(dir->name+file->name);
-				} else {
-					assert_log(false);
-				}
-
-				if (tex) {
-					auto img_size = (v2)tex->get_size_px();
-
-					v2 aspect = img_size / max(img_size.x, img_size.y);
-
-					v2 sz_px = (v2)cell_sz * aspect -5*2;
-					v2 offs_to_center_px = (cell_sz -sz_px) / 2;
+					v2 offs_to_center_px = (cell_sz -img_onscreen_sz_px) / 2;
 
 					v2 pos_px = view_center +pos_center_rel_px -cell_sz / 2;
 					pos_px += offs_to_center_px;
 
-					draw_textured_quad(pos_px, sz_px, *tex, rgba8(255,255,255, (u8)(alpha * 255 +0.5f)));
+					draw_textured_quad(pos_px, img_onscreen_sz_px, tex, rgba8(255,255,255, (u8)(alpha * 255 +0.5f)));
+				};
+
+				if (dynamic_cast<Directory_Tree*>(c)) {
+
+					Texture2D* tex = tex_folder_icon.get();
+					draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha);
+
+				} else if (dynamic_cast<File*>(c)) {
+
+					auto* file = (File*)c;
+						
+					if (file->is_image) {
+						
+						//v2 pixel_density = get_texture_centered_in_cell_onscreen_size(file->size_px) / (v2)file->size_px;
+						iv2 onscreen_size_px = get_texture_centered_in_cell_onscreen_size(file->size_px);
+
+						//Texture2D* tex = tex_streamer.query_image_texture(file->filepath, max(pixel_density.x,pixel_density.y));
+						Texture2D* tex = tex_streamer.query_image_texture(file->filepath, onscreen_size_px);
+
+						if (tex) {
+							draw_texture_centered_in_cell(*tex, file->size_px, alpha);
+						} else {
+							Texture2D* tex = tex_loading_file_icon.get();
+							draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
+						}
+
+					} else {
+						
+						Texture2D* tex = tex_file_icon.get();
+						draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
+					}
+
 				} else {
-					v2 pos_px = view_center +pos_center_rel_px +cell_sz * (-0.5f +(1 -loading_icon_fullsz_sz)/2);
-					draw_textured_quad(pos_px, cell_sz * loading_icon_fullsz_sz, *tex_loading_icon.get(), rgba8(255,255,255, (int)(loading_icon_fullsz_alpha * 255.0f +0.5f)));
+					assert_log(false);
 				}
+				
+				//bool display_loading_icon = false;
+				//if (display_loading_icon) {
+				//	v2 pos_px = view_center +pos_center_rel_px +cell_sz * (-0.5f +(1 -loading_icon_sz));
+				//	draw_textured_quad(pos_px, cell_sz * loading_icon_sz, *tex_loading_icon.get(), rgba8(255,255,255, (int)(alpha * loading_icon_alpha * 255.0f +0.5f)));
+				//}
 			};
 
 			flt rel_indx = (flt)content_i -view_coord;
@@ -548,6 +670,8 @@ struct App {
 			}
 
 		}
+	
+		tex_streamer.end_frame();
 	}
 
 	struct Solid_Col_Vertex {
@@ -744,8 +868,8 @@ struct App {
 
 		
 		gui();
-		img_cache.async_image_loading(frame_i);
 		file_grid(viewed_dir.get(), imgui_left_bar_size.x);
+		tex_streamer.async_image_loading(frame_i);
 
 		//gui_file_tree(viewed_dir.get());
 
@@ -807,14 +931,19 @@ struct App {
 		// display to screen
 		glfwSwapBuffers(disp.window);
 
-		++frame_i;
+		++frame_i; // increment here instead of in mainloop because this we also draw frames on glfw_refresh_callback()
 		return false;
 	}
 };
 
 App	app;
 
-void glfw_refresh_callback (GLFWwindow* window) {
+bool glfw_refresh_callback_called_inside_frame_call = false;
+
+void glfw_refresh_callback (GLFWwindow* window) { // refresh callback so window resizing does not freeze rendering
+	if (glfw_refresh_callback_called_inside_frame_call)
+		return; // prevent recursive calls of frame, this once happened when a failed assert tried to open a messagebox
+
 	app.frame();
 }
 
@@ -828,15 +957,20 @@ int main (int argc, char** argv) {
 	
 	app.init();
 
-	// Controls
-	for (;;) {
+	bool should_close = false;
+	while (!should_close) {
 		
 		mouse_wheel_diff = 0;
 		do_toggle_fullscreen = false;
 
-		glfwPollEvents(); // calls async input callbacks
+		glfwPollEvents(); // calls async input callbacks and glfw_refresh_callback ()
 		
-		if (app.frame()) break;
+		// see usage of glfw_refresh_callback_called_inside_frame_call in glfw_refresh_callback
+		glfw_refresh_callback_called_inside_frame_call = true;
+		
+		should_close = app.frame();
+		
+		glfw_refresh_callback_called_inside_frame_call = false;
 	}
 
 	disp.save_window_positioning();

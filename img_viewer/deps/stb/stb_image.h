@@ -7165,7 +7165,7 @@ static int stbi__is_16_main(stbi__context *s)
 }
 
 #ifndef STBI_NO_STDIO
-STBIDEF int stbi_info(char const *filename, int *x, int *y, int *comp)
+STBIEXTERN int stbi_info(char const *filename, int *x, int *y, int *comp)
 {
     FILE *f = stbi__fopen(filename, "rb");
     int result;
@@ -7175,7 +7175,7 @@ STBIDEF int stbi_info(char const *filename, int *x, int *y, int *comp)
     return result;
 }
 
-STBIDEF int stbi_info_from_file(FILE *f, int *x, int *y, int *comp)
+STBIEXTERN int stbi_info_from_file(FILE *f, int *x, int *y, int *comp)
 {
    int r;
    stbi__context s;
