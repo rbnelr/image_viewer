@@ -15,7 +15,7 @@
 #include "vector_util.hpp"
 
 void glfw_error_proc (int err, cstr msg) {
-	warning_log("GLFW Error! 0x%x '%s'\n", err, msg);
+	fprintf(stderr, "GLFW Error! 0x%x '%s'\n", err, msg);
 }
 
 void APIENTRY ogl_debuproc (GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, cstr message, void const* userParam) {
@@ -65,7 +65,7 @@ void APIENTRY ogl_debuproc (GLenum source, GLenum type, GLuint id, GLenum severi
 		case GL_DEBUG_SEVERITY_LOW_ARB:				severity_str = "GL_DEBUG_SEVERITY_LOW_ARB";			break;
 	}
 
-	warning_log("OpenGL debug proc: severity: %s src: %s type: %s id: %d  %s\n",
+	fprintf(stderr, "OpenGL debug proc: severity: %s src: %s type: %s id: %d  %s\n",
 			severity_str, src_str, type_str, id, message);
 }
 
@@ -110,7 +110,7 @@ struct Display {
 
 	iv2				framebuffer_size_px = 0;
 
-	void toggle_fullscreen () {
+	void toggle_fullscreen (int swap_interval) {
 		if (!is_fullscreen) {
 			
 			windowed_placement.get_current(window);
@@ -122,6 +122,8 @@ struct Display {
 			glfwSetWindowMonitor(window, NULL, windowed_placement.pos_px.x,windowed_placement.pos_px.y, windowed_placement.size_px.x,windowed_placement.size_px.y, 0);
 
 		}
+
+		glfwSwapInterval(swap_interval);
 
 		is_fullscreen = !is_fullscreen;
 	}
@@ -147,7 +149,7 @@ struct Display {
 void init_engine () {
 	glfwSetErrorCallback(glfw_error_proc);
 
-	assert_log(glfwInit() != 0, "glfwInit() failed");
+	assert(glfwInit() != 0);
 
 	{
 		int count;

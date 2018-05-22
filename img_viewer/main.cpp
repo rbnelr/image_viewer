@@ -14,15 +14,18 @@ using std::string;
 
 #include <vector>
 
+#include "assert.h"
+
 #include "glad_helper.hpp"
 #include "glfw3.h"
 
 #include "basic_typedefs.hpp"
 
+#include "prints.hpp"
+
 #include "texture.hpp"
 
 #include "vector_util.hpp"
-#include "logging.hpp"
 #include "simple_file_io.hpp"
 
 #include "imgui_overlay.hpp"
@@ -79,243 +82,13 @@ struct MButton {
 
 int	frame_i = 0;
 
-struct Texture_Streamer {
+#include "texture_streamer.hpp"
 
-	struct Cached_Texture {
-		Texture2D	tex;
-
-		iv2			size_px;
-		bool		currently_async_loading; // loading async via threadpool
-
-		int			not_queried_for_n_frames;
-	};
-
-	std::map< str, unique_ptr<Cached_Texture> >	textures; // key: filepath
-
-	u64 memory_size = 0; // how many bytes of texture data we currently have uploaded
-
-	struct Img_Loader_Threadpool_Job { // input is filepath to file to load
-		string	filepath;
-		iv2		size_px;
-	};
-	struct Img_Loader_Threadpool_Result {
-		string	filepath;
-		Image2D	src_img;
-	};
-
-	struct Img_Loader_Threadpool_Processor {
-		static Img_Loader_Threadpool_Result process_job (Img_Loader_Threadpool_Job&& job) {
-			Img_Loader_Threadpool_Result res;
-
-			res.filepath = job.filepath;
-
-			// load image from disk
-			try {
-				res.src_img = Image2D::load_from_file(job.filepath);
-
-				res.src_img = Image2D::rescale_box_filter(res.src_img, job.size_px);
-
-			} catch (Expt_File_Load_Fail const& e) {
-				//assert_log(false, e.what()); // is not threadsafe!
-				// res.full_src_img is still null (by which i mean default constructed) -> signifies that image was not loaded
-			}
-
-			return res;
-		}
-	};
-
-	Threadpool<Img_Loader_Threadpool_Job, Img_Loader_Threadpool_Result, Img_Loader_Threadpool_Processor> img_loader_threadpool;
-
-	void init_thread_pool () {
-		int cpu_threads = (int)std::thread::hardware_concurrency();
-		int threads = max(cpu_threads -1, 2);
-
-		img_loader_threadpool.start_threads(threads);
-	}
-
-	u64 get_memory_size (Cached_Texture const& t) {
-		auto sz = t.tex.get_size_px();
-		return sz.y * sz.x * sizeof(rgba8);
-	}
-
-	Cached_Texture* find_texture (string const& filepath) {
-		auto it = textures.find(filepath);
-		return it != textures.end() ? it->second.get() : nullptr;
-	}
-	void evict_texture (decltype(textures)::iterator it) {
-		memory_size -= get_memory_size(*it->second);
-		textures.erase(it);
-	}
-
-	void begin_frame () {
-		for (auto& t : textures) {
-			t.second->not_queried_for_n_frames++;
-		}
-	}
-	void end_frame () {
-		for (auto it=textures.begin(), next_it=textures.begin(); it!=textures.end(); it=next_it) {
-			next_it = it; ++next_it;
-			if (it->second->not_queried_for_n_frames != 0)
-				evict_texture(it);
-		}
-	}
-
-	Texture2D* query_image_texture (strcr filepath, iv2 size_px) {
-		
-		auto* tex = find_texture(filepath);
-		
-		bool correct_size_cached = tex && all(tex->size_px == size_px);
-
-		if (correct_size_cached) {
-			tex->not_queried_for_n_frames = 0;
-			return tex->currently_async_loading ? nullptr : &tex->tex;
-		}
-
-		if (tex && !correct_size_cached) {
-			evict_texture(textures.find(filepath));
-		}
-
-		// not cached yet
-		auto img = make_unique<Cached_Texture>();
-
-		img_loader_threadpool.jobs.push({filepath, size_px});
-
-		img->size_px = size_px;
-		img->currently_async_loading = true;
-
-		auto ret = textures.emplace(filepath, std::move(img));
-		assert_log(ret.second);
-
-		return nullptr; // just started loading async
-	}
-
-	void async_image_loading (int frame_i) {
-
-		if (ImGui::CollapsingHeader("Texture_Streamer", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Value("threadpool threads", img_loader_threadpool.get_thread_count());
-
-			ImGui::Value_Bytes("memory_size", memory_size);
-
-
-			static f32 sz_in_mb[256] = {};
-			static int cur_val = 0;
-
-			if (frame_i % 1 == 0) {
-				sz_in_mb[cur_val++] = (flt)memory_size / 1024 / 1024;
-				cur_val %= ARRLEN(sz_in_mb);
-			}
-
-			static flt range = 16;
-			ImGui::DragFloat("memory_size_plot_range", &range, 10);
-
-			ImGui::PushItemWidth(-1);
-			ImGui::PlotLines("##memory_size", sz_in_mb, ARRLEN(sz_in_mb), cur_val, "memory_size in MB", 0, range, ImVec2(0,80));
-			ImGui::PopItemWidth();
-			
-			static bool show_image_loader_threadpool_jobs = false;
-			show_image_loader_threadpool_jobs = ImGui::Button("show_image_loader_threadpool_jobs") || show_image_loader_threadpool_jobs;
-			
-			if (show_image_loader_threadpool_jobs) {
-				ImGui::Begin("Texture_Streamer image loader threadpool jobs", &show_image_loader_threadpool_jobs);
-				
-				static ImGuiTextFilter filter;
-				filter.Draw();
-
-				auto foreach_job = [] (Img_Loader_Threadpool_Job const& job) {
-					if (!filter.PassFilter(job.filepath.c_str()))
-						return;
-
-					ImGui::Text(job.filepath.c_str());
-					ImGui::SameLine();
-					ImGui::Value("sz", job.size_px);
-				};
-
-				static bool order = false;
-
-				ImGui::SameLine();
-				ImGui::Checkbox("Order: checked: top==next to be popped  unchecked: top==most recently pushed", &order);
-				
-				if (order) {
-					img_loader_threadpool.jobs.iterate_queue_back_to_front(foreach_job);
-				} else {
-					img_loader_threadpool.jobs.iterate_queue_front_to_back(foreach_job);
-				}
-
-				ImGui::End();
-			}
-		}
-
-		auto job_still_needed = [&] (Cached_Texture const* tex, iv2 job_tex_size_px) {
-			if (!tex) { // texture is not in our list of textures (was evicted while still async loading?)
-				return false;
-			} else if (any(tex->size_px != job_tex_size_px)) { // texture is not the correct size (desired size changed while still async loading? -> both sizes are queued threadpool at the same time)
-				return false;
-			} else if (!tex->currently_async_loading) { // texture is the correct size but was already completed (i think this can happen when: query(sz:5x5), query(sz:6x6), query(sz:5x5) -> tex->size==5x5 but there are two versions of 5x5 in queue)
-				return false;
-			} else {
-				return true;
-			}
-		};
-
-		auto need_to_cancel_job = [&] (Img_Loader_Threadpool_Job const& job) {
-			auto* tex = find_texture(job.filepath);
-			return !job_still_needed(tex, job.size_px);
-		};
-
-		img_loader_threadpool.jobs.cancel(need_to_cancel_job);
-
-		f64 uploading_begin = glfwGetTime();
-
-		for (;;) {
-
-			Img_Loader_Threadpool_Result res;
-			if (!img_loader_threadpool.results.try_pop(&res))
-				break; // currently no images loaded async, stop polling
-
-			if (res.src_img.pixels == nullptr) {
-				// image could not be loaded, simply pretend it never finished loading for development purposes
-			} else {
-				auto* tex = find_texture(res.filepath);
-				if (!job_still_needed(tex, res.src_img.size)) {
-					// Ignore result
-				} else {
-					// create texture from image by uploading
-
-					tex->tex = Texture2D::generate();
-					tex->tex.upload( res.src_img.pixels, res.src_img.size );
-
-					//tex->tex.gen_mipmaps();
-					tex->tex.set_filtering_mipmapped();
-					tex->tex.set_border_clamp();
-				
-					memory_size += get_memory_size(*tex);
-
-					tex->currently_async_loading = false;
-				}
-			}
-
-			f32 elapsed = (f32)(glfwGetTime() -uploading_begin);
-
-			if (elapsed > 0.005f)
-				break; // stop uploading if uploading has already taken longer than timeout
-		}
-
-		f32 upload_elapsed = (f32)(glfwGetTime() -uploading_begin);
-
-		static f32 max_upload_elapsed = -INF;
-		max_upload_elapsed = max(max_upload_elapsed, upload_elapsed);
-
-		ImGui::Value("max_upload_elapsed (ms)", max_upload_elapsed * 1000);
-	}
-
-	void clear () {
-		textures.clear();
-
-		memory_size = 0;
-	}
-};
+#include "string_stuff.hpp"
 
 struct App {
+	int				swap_interval = 1;
+
 	//icol			bg_col =		irgb(41,49,52);
 	
 	MButton			lmb =	 {0,0,0};
@@ -325,6 +98,8 @@ struct App {
 	unique_ptr<Texture2D>	tex_loading_icon;
 	unique_ptr<Texture2D>	tex_loading_file_icon;
 	unique_ptr<Texture2D>	tex_file_icon;
+	unique_ptr<Texture2D>	tex_file_icon_GIF;
+	unique_ptr<Texture2D>	tex_file_icon_mp4;
 
 	static Texture2D create_null_texture () {
 		auto tex = Texture2D::generate();
@@ -339,7 +114,7 @@ struct App {
 		try {
 			img = Image2D::load_from_file(filepath);
 		} catch (Expt_File_Load_Fail const& e) {
-			warning_log("%s\n", e.what());
+			fprintf(stderr, "%s\n", e.what());
 			return std::move(create_null_texture());
 		}
 
@@ -376,24 +151,7 @@ struct App {
 	struct Image_File : File {
 		string	filepath; // the relative or absolute filepath needed to open the file
 		
-		std::vector<iv2> mip_sizes_px;
-
-		void calc_mip_sizes (iv2 full_size_px) {
-			mip_sizes_px.clear();
-
-			iv2 sz = full_size_px;
-			for (;;) {
-				mip_sizes_px.push_back(sz);
-
-				if (all(sz == 1))
-					break;
-
-				sz = max(sz / 2, 1);
-			}
-		}
-		iv2 get_full_size_px () {
-			return mip_sizes_px[0];
-		}
+		iv2		size_px;
 
 		filetype_e type () { return FT_IMAGE_FILE; };
 	};
@@ -433,11 +191,12 @@ struct App {
 				img->name = fn;
 				img->filepath = std::move(filepath);
 
-				img->calc_mip_sizes(size_px);
+				img->size_px = size_px;
 
 				file = unique_ptr<File>(std::move( img ));
 			} else {
 				file = unique_ptr<File>(std::move( make_unique<Non_Image_File>() ));
+				file->name = fn;
 			}
 
 			tree->content.emplace_back( file.get() );
@@ -449,16 +208,21 @@ struct App {
 	unique_ptr<Directory_Tree>	viewed_dir = nullptr;
 
 	void init () {
-		tex_loading_icon = make_unique<Texture2D>( simple_load_texture("assets_src/loading_icon.png") );
-		tex_loading_file_icon = make_unique<Texture2D>( simple_load_texture("assets_src/loading_file_icon.png") );
-		tex_folder_icon = make_unique<Texture2D>( simple_load_texture("assets_src/folder_icon.png") );
-		tex_file_icon = make_unique<Texture2D>( simple_load_texture("assets_src/file_icon.png") );
+		glfwSwapInterval(swap_interval);
+
+		tex_loading_icon =		make_unique<Texture2D>( simple_load_texture("assets_src/loading_icon.png") );
+		tex_loading_file_icon =	make_unique<Texture2D>( simple_load_texture("assets_src/loading_file_icon.png") );
+		tex_folder_icon =		make_unique<Texture2D>( simple_load_texture("assets_src/folder_icon.png") );
+		tex_file_icon =			make_unique<Texture2D>( simple_load_texture("assets_src/file_icon.png") );
+		tex_file_icon_GIF =		make_unique<Texture2D>( simple_load_texture("assets_src/file_icon_GIF.png") );
+		tex_file_icon_mp4 =		make_unique<Texture2D>( simple_load_texture("assets_src/file_icon_mp4.png") );
 
 		tex_streamer.init_thread_pool();
 	}
 
 	void gui () {
-		static str viewed_dir_path_input_text = "P:/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
+		//static str viewed_dir_path_input_text = "E:/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
+		static str viewed_dir_path_input_text = "C:/Users/uidn7241/Desktop/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
 		
 		if (!ImGui::CollapsingHeader("viewed_dir_path", ImGuiTreeNodeFlags_DefaultOpen))
 			return;
@@ -489,7 +253,7 @@ struct App {
 		if (trigger_load) {
 			load_ok = false;
 			
-			tex_streamer.clear();
+			//tex_streamer.clear();
 			viewed_dir = nullptr;
 			
 			try {
@@ -529,7 +293,7 @@ struct App {
 
 	}
 
-	void file_grid (Directory_Tree* dir, int left_bar_size) {
+	void file_grid (Directory_Tree* dir, int left_bar_size, iv2 mouse_pos_px) {
 		static flt zoom_multiplier_target = 1 ? 0.1f : 1;
 		static flt zoom_multiplier = zoom_multiplier_target;
 
@@ -576,9 +340,8 @@ struct App {
 
 		v2 grid_sz_cells = grid_sz_px / cell_sz;
 
-		static flt view_coord = 48;//(flt)(dir ? (int)dir->content.size() : 0) / 2;
-		static v2 view_offs = 0;
-
+		static v2 view_coord = v2(48, 0);//(flt)(dir ? (int)dir->content.size() : 0) / 2;
+		
 		static flt file_icon_sz = 0.70f;
 		static flt file_icon_alpha = 0.12f;
 
@@ -610,8 +373,7 @@ struct App {
 			
 			IMGUI_SAVABLE_DRAGT( DragFloat,	"debug_view_size_multiplier", &debug_view_size_multiplier, 1.0f/300, 0.01f);
 			
-			IMGUI_SAVABLE_DRAGT( DragFloat,	"view_coord", &view_coord, 1.0f / 50);
-			IMGUI_SAVABLE_DRAGT( DragFloat2, "view_offs", &view_offs.x, 1.0f / 50);
+			IMGUI_SAVABLE_DRAGT( DragFloat2,	"view_coord", &view_coord.x, 1.0f / 50);
 
 			ImGui::DragFloat("file_icon_sz", &file_icon_sz, 0.01f);
 			ImGui::DragFloat("file_icon_alpha", &file_icon_alpha, 0.01f);
@@ -620,8 +382,6 @@ struct App {
 			ImGui::DragFloat("loading_icon_alpha", &loading_icon_alpha, 0.01f);
 		}
 
-		tex_streamer.begin_frame();
-
 		static ImGuiTextFilter list_files_filter;
 		
 		bool list_files = ImGui::CollapsingHeader("file_list");
@@ -629,11 +389,43 @@ struct App {
 			list_files_filter.Draw();
 		}
 
+		v2 mouse_coord;
+		{
+			v2 pos_px_grid = ((v2)mouse_pos_px +0.5f) -(v2)view_center;
+			v2 pos_cells = pos_px_grid / cell_sz +view_coord;
+
+			flt pos_cells_y_remainder;
+			flt pos_cells_y_mod = mod_range(pos_cells.y, -0.5f,+0.5f, &pos_cells_y_remainder);
+
+			mouse_coord = v2(pos_cells.x +pos_cells_y_remainder * grid_sz_cells.x, pos_cells_y_mod);
+		}
+
+		v2 dragged_view_coord = view_coord;
+
+		static v2 drag_mouse_coord;
+
+		if (rmb.went_down) {
+			drag_mouse_coord = mouse_coord;
+		}
+		if (rmb.down || rmb.went_up) {
+			v2 offs = mouse_coord -drag_mouse_coord;
+
+			dragged_view_coord += drag_mouse_coord -mouse_coord;
+		}
+		if (rmb.went_up) {
+			view_coord = dragged_view_coord;
+		}
+
+		tex_streamer.queries_begin();
+
 		for (int content_i=0; content_i<(dir ? (int)dir->content.size() : 0); content_i++) {
 			auto img_instance = [&] (v2 pos_center_rel, flt alpha, bool is_original_instance) {
 				if (	pos_center_rel.y < -grid_sz_cells.y/2 -0.5f ||
 						pos_center_rel.y > +grid_sz_cells.y/2 +0.5f)
 					return;
+
+				//if (content_i == (int)roundf(dragged_view_coord.x))
+				//	alpha *= 0.5f;
 
 				v2 pos_center_rel_px = pos_center_rel * cell_sz;
 
@@ -675,7 +467,32 @@ struct App {
 
 					case FT_NON_IMAGE_FILE: {
 						
-						Texture2D* tex = tex_file_icon.get();
+						Texture2D* tex;
+						
+						auto find_file_ext = [] (string const& filepath) {
+							auto dot = filepath.find_last_of(".");
+							
+							string ext = "";
+							
+							if (dot != string::npos) {
+								for (size_t i=dot+1; i<filepath.size(); ++i) {
+									ext.push_back( to_lower(filepath[i]) );
+								}
+							}
+
+							return ext;
+						};
+						
+						string file_ext = find_file_ext(c->name);
+						
+						if (		file_ext.compare("gif") == 0 ) {
+							tex = tex_file_icon_GIF.get();
+						} else if (	file_ext.compare("mp4") == 0 ) {
+							tex = tex_file_icon_mp4.get();
+						} else {
+							tex = tex_file_icon.get();
+						}
+
 						draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
 
 						if (list_files && is_original_instance && list_files_filter.PassFilter(c->name.c_str())) {
@@ -688,26 +505,26 @@ struct App {
 					case FT_IMAGE_FILE: {
 						auto* img = (Image_File*)c;
 
-						iv2 onscreen_size_px = get_texture_centered_in_cell_onscreen_size(img->get_full_size_px());
+						iv2 onscreen_size_px = get_texture_centered_in_cell_onscreen_size(img->size_px);
 						
-						int mip_level_to_use = 0;
-						for (int i=0; i<(int)img->mip_sizes_px.size(); ++i) {
-							if (any(img->mip_sizes_px[i] < onscreen_size_px)) {
-								mip_level_to_use = i == 0 ? 0 : i -1;
-								break;
+						auto* tex = tex_streamer.query(img->filepath, onscreen_size_px, img->size_px);
+
+						flt px_dens = tex->get_cached_pixel_density(onscreen_size_px);
+						if (px_dens == 0) {
+
+							Texture2D* tex = tex_loading_file_icon.get();
+							draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
+
+						} else {
+							
+							draw_texture_centered_in_cell(*tex->tex, img->size_px, alpha);
+
+							if (px_dens < 1) { // display_loading_icon if some mips of the texture are loaded, but the mip that is at least onscreen_size_px is not (ie. displayed pixel density < 1, ie. image is still blurry)
+								v2 pos_px = view_center +pos_center_rel_px +cell_sz * (-0.5f +(1 -loading_icon_sz));
+								draw_textured_quad(pos_px, cell_sz * loading_icon_sz, *tex_loading_icon.get(), rgba8(255,255,255, (int)(alpha * loading_icon_alpha * 255.0f +0.5f)));
 							}
 						}
 
-						iv2 desired_size_px = img->mip_sizes_px[mip_level_to_use];
-
-						Texture2D* tex = tex_streamer.query_image_texture(img->filepath, desired_size_px);
-
-						if (tex) {
-							draw_texture_centered_in_cell(*tex, img->get_full_size_px(), alpha);
-						} else {
-							Texture2D* tex = tex_loading_file_icon.get();
-							draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
-						}
 
 						if (list_files && is_original_instance && list_files_filter.PassFilter(c->name.c_str())) {
 							ImGui::PushItemWidth(-100);
@@ -715,26 +532,21 @@ struct App {
 							ImGui::PopItemWidth();
 
 							ImGui::SameLine();
-							auto& sz = img->get_full_size_px();
+							auto& sz = img->size_px;
 							ImGui::TextBox("##res", prints("%4d x %4d", sz.x,sz.y) );
 						}
 					} break;
 
 					default:
-						assert_log(false);
+						assert(false);
 				}
 
 				if (list_files)
 					ImGui::PopID();
 				
-				//bool display_loading_icon = false;
-				//if (display_loading_icon) {
-				//	v2 pos_px = view_center +pos_center_rel_px +cell_sz * (-0.5f +(1 -loading_icon_sz));
-				//	draw_textured_quad(pos_px, cell_sz * loading_icon_sz, *tex_loading_icon.get(), rgba8(255,255,255, (int)(alpha * loading_icon_alpha * 255.0f +0.5f)));
-				//}
 			};
 
-			flt rel_indx = (flt)content_i -view_coord;
+			flt rel_indx = (flt)content_i -dragged_view_coord.x;
 
 			flt quotient;
 			flt remainder = mod_range(rel_indx, -grid_sz_cells.x/2, +grid_sz_cells.x/2, &quotient);
@@ -742,13 +554,10 @@ struct App {
 			flt out_of_bounds_l = max(-(remainder -0.5f +grid_sz_cells.x/2), 0.0f);
 			flt out_of_bounds_r = max(  remainder +0.5f -grid_sz_cells.x/2 , 0.0f);
 			
-			v2 pos_center_rel = v2(remainder,quotient) -view_offs;
+			v2 pos_center_rel = v2(remainder,quotient -dragged_view_coord.y);
 
-			assert_log((out_of_bounds_l +out_of_bounds_r) <= 1);
-			img_instance(pos_center_rel, content_i == (int)roundf(view_coord) ? 1 : 1 -out_of_bounds_l -out_of_bounds_r, true);
-
-			//ImGui::Value("content_i", content_i);
-			//ImGui::Value("(int)roundf(view_coord)", (int)roundf(view_coord));
+			assert((out_of_bounds_l +out_of_bounds_r) <= 1);
+			img_instance(pos_center_rel, content_i == (int)roundf(dragged_view_coord.x) ? 1 : 1 -out_of_bounds_l -out_of_bounds_r, true);
 
 			if (out_of_bounds_l > 0) {
 				img_instance((pos_center_rel -v2(-grid_sz_cells.x,1)), out_of_bounds_l, false);
@@ -758,8 +567,8 @@ struct App {
 			}
 
 		}
-	
-		tex_streamer.end_frame();
+		
+		tex_streamer.queries_end();
 	}
 
 	struct Solid_Col_Vertex {
@@ -924,7 +733,7 @@ struct App {
 
 	}
 
-	void render_all () {
+	void render_all (iv2 mouse_pos_px) {
 		static iv2 imgui_left_bar_size = iv2(400, -1);
 
 		ImGui::SetNextWindowBgAlpha(1);
@@ -945,7 +754,7 @@ struct App {
 				fullscreen = !fullscreen;
 			
 			if (fullscreen != disp.is_fullscreen) {
-				disp.toggle_fullscreen();
+				disp.toggle_fullscreen(swap_interval);
 			}
 		}
 
@@ -956,9 +765,8 @@ struct App {
 
 		
 		gui();
-		file_grid(viewed_dir.get(), imgui_left_bar_size.x);
-		tex_streamer.async_image_loading(frame_i);
-
+		file_grid(viewed_dir.get(), imgui_left_bar_size.x, mouse_pos_px);
+		
 		//gui_file_tree(viewed_dir.get());
 
 		ImGui::Separator();
@@ -1009,7 +817,7 @@ struct App {
 		glClearColor(0,0,0,1);
 		glClear(GL_COLOR_BUFFER_BIT);
 
-		render_all();
+		render_all(mouse_pos_px);
 
 		imgui_context.draw(disp.framebuffer_size_px);
 
@@ -1018,6 +826,17 @@ struct App {
 
 		// display to screen
 		glfwSwapBuffers(disp.window);
+
+		{
+			f64 now = glfwGetTime();
+			static f64 prev_frame_end = now;
+
+			flt dt = (flt)(now -prev_frame_end);
+
+			prev_frame_end = now;
+
+			//printf("%d dt: %f\n", frame_i, dt);
+		}
 
 		++frame_i; // increment here instead of in mainloop because this we also draw frames on glfw_refresh_callback()
 		return false;

@@ -7,8 +7,6 @@ using std::string;
 
 #include "windows.h"
 
-#include "logging.hpp"
-
 namespace n_find_files {
 	class Expt_Path_Not_Found : std::exception {
 	public:
@@ -47,7 +45,7 @@ namespace n_find_files {
 	void find_files (strcr dir_path, std::vector<str>* dirnames, std::vector<str>* filenames) {
 		WIN32_FIND_DATA data;
 
-		assert_log(dir_path.size() > 0 && dir_path.back() == '/');
+		assert(dir_path.size() > 0 && dir_path.back() == '/');
 		str search_str = dir_path +"*";
 
 		HANDLE hFindFile = FindFirstFile(search_str.c_str(), &data);
@@ -82,7 +80,7 @@ namespace n_find_files {
 					break;
 				} else {
 					// TODO: in which cases would this happen?
-					assert_log(false, "FindNextFile failed! [%x]", err);
+					assert(false);//, prints("FindNextFile failed! [%x]", err).c_str());
 					FindClose(hFindFile);
 					return;
 				}
@@ -107,8 +105,8 @@ namespace n_find_files {
 
 		std::vector<str>	dirnames;
 
-		assert_log(dir_path.size() == 0 ||	dir_path.back() == '/');
-		assert_log(dir_name.size() > 1 &&	dir_name.back() == '/');
+		assert(dir_path.size() == 0 ||	dir_path.back() == '/');
+		assert(dir_name.size() > 1 &&	dir_name.back() == '/');
 
 		str dir_full = dir_path+dir_name;
 

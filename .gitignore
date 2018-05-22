@@ -6,14 +6,10 @@
 
 #*.pdb
 *.idb
-*.vcxproj
-*.vcxproj.filters
-*.vcxproj.user
 *.log
 *.tlog
 *.lastbuildstate
 *glfw*/
-*.sln
 *.psess
 *.vsp
 *.csv

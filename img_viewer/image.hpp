@@ -10,7 +10,6 @@ typedef std::string const& strcr;
 
 #include "stbi.hpp"
 
-#include "logging.hpp"
 #include "vector_util.hpp"
 #include "colors.hpp"
 

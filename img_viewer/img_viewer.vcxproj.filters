@@ -1,0 +1,145 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClInclude Include="deps\dear_imgui\imgui_demo.hpp">
+      <Filter>deps</Filter>
+    </ClInclude>
+    <ClInclude Include="deps\dear_imgui\imgui_draw.hpp">
+      <Filter>deps</Filter>
+    </ClInclude>
+    <ClInclude Include="raz_libs\basic_typedefs.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="raz_libs\compiler_specific.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="raz_libs\preprocessor_stuff.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="prints.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="raz_libs\vector.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="raz_libs\vector_tv2.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="raz_libs\vector_tv3.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="raz_libs\vector_tv4.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="vector_util.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="raz_libs\math.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="platform.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+    <ClInclude Include="imgui_overlay.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+    <ClInclude Include="glad_helper.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+    <ClInclude Include="find_files.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+    <ClInclude Include="texture.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+    <ClInclude Include="shader.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+    <ClInclude Include="image.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+    <ClInclude Include="raz_libs\defer.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="stbi.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+    <ClInclude Include="deps\dear_imgui\imgui.cpp">
+      <Filter>deps</Filter>
+    </ClInclude>
+    <ClInclude Include="deps\dear_imgui\imgui.h">
+      <Filter>deps</Filter>
+    </ClInclude>
+    <ClInclude Include="threadsafe_queue.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+    <ClInclude Include="raz_libs\simple_file_io.hpp">
+      <Filter>raz_libs</Filter>
+    </ClInclude>
+    <ClInclude Include="deps\stb\stb_image.h">
+      <Filter>deps</Filter>
+    </ClInclude>
+    <ClInclude Include="threadpool.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+    <ClInclude Include="colors.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+    <ClInclude Include="texture_streamer.hpp">
+      <Filter>app_code</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="shaders\solid_col.vert">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\solid_col.frag">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\textured.frag">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\textured.vert">
+      <Filter>shaders</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="TODO.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="deps">
+      <UniqueIdentifier>{53804f08-0d7b-45fa-90a9-503e20decb54}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="raz_libs">
+      <UniqueIdentifier>{b856c8c4-7be7-4427-a002-dfe82527d5c5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="app_code">
+      <UniqueIdentifier>{8f4b0e27-def9-4862-9e28-18fb34f1b161}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="shaders">
+      <UniqueIdentifier>{f762b2e9-f1b6-4639-ab4f-aad5b5e146d4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="app_code_translation_units">
+      <UniqueIdentifier>{bbe2f8cd-5e7a-471f-ac32-ce4770953db4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="assets_src">
+      <UniqueIdentifier>{fe3c3db9-f8f9-4ea0-b85c-2700ccf84659}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="stbi.cpp">
+      <Filter>app_code_translation_units</Filter>
+    </ClCompile>
+    <ClCompile Include="main.cpp">
+      <Filter>app_code_translation_units</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="assets_src\folder_icon.png">
+      <Filter>assets_src</Filter>
+    </Image>
+    <Image Include="assets_src\loading_icon.png">
+      <Filter>assets_src</Filter>
+    </Image>
+  </ItemGroup>
+</Project>

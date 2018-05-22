@@ -9,10 +9,8 @@
 
 #pragma once
 
-#include "logging.hpp"
-
 //---- Define assertion handler. Defaults to calling assert().
-#define IM_ASSERT(_EXPR)  assert_log(_EXPR)
+//#define IM_ASSERT(_EXPR)  assert_log(_EXPR)
 
 //---- Define attributes of all API symbols declarations, e.g. for DLL under Windows.
 //#define IMGUI_API __declspec( dllexport )

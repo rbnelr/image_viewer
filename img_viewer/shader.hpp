@@ -12,7 +12,6 @@ typedef std::string const& strcr;
 #include "glfw3.h"
 
 #include "simple_file_io.hpp"
-#include "logging.hpp"
 
 struct Shader {
 	str		name = "<unnamed Texture2D>";
@@ -53,7 +52,7 @@ struct Shader {
 
 			GLsizei written_len = 0;
 			glGetShaderInfoLog(shad, log_len, &written_len, &(*log)[0]);
-			assert_log(written_len == (log_len -1));
+			assert(written_len == (log_len -1));
 
 			log->resize(written_len);
 
@@ -77,7 +76,7 @@ struct Shader {
 
 			GLsizei written_len = 0;
 			glGetProgramInfoLog(prog, log_len, &written_len, &(*log)[0]);
-			assert_log(written_len == (log_len -1));
+			assert(written_len == (log_len -1));
 
 			log->resize(written_len);
 
@@ -90,7 +89,7 @@ struct Shader {
 
 		str source;
 		if (!load_text_file(filename, &source)) {
-			warning_log("Could not load shader source");
+			fprintf(stderr, "Could not load shader source");
 			return false;
 		}
 
@@ -112,11 +111,11 @@ struct Shader {
 			success = status == GL_TRUE;
 			if (!success) {
 				// compilation failed
-				assert_log(false, "OpenGL error in shader compilation \"%s\"!\n>>>\n%s\n<<<\n", filename.c_str(), log_avail ? log_str.c_str() : "<no log available>");
+				fprintf(stderr, "OpenGL error in shader compilation \"%s\"!\n>>>\n%s\n<<<\n", filename.c_str(), log_avail ? log_str.c_str() : "<no log available>");
 			} else {
 				// compilation success
 				if (log_avail) {
-					assert_log(false, "OpenGL shader compilation log \"%s\":\n>>>\n%s\n<<<\n", filename.c_str(), log_str.c_str());
+					fprintf(stderr, "OpenGL shader compilation log \"%s\":\n>>>\n%s\n<<<\n", filename.c_str(), log_str.c_str());
 				}
 			}
 		}
@@ -158,11 +157,11 @@ struct Shader {
 			success = status == GL_TRUE;
 			if (!success) {
 				// linking failed
-				assert_log(false, "OpenGL error in shader linkage \"%s\"|\"%s\"!\n>>>\n%s\n<<<\n", vert_filename.c_str(), frag_filename.c_str(), log_avail ? log_str.c_str() : "<no log available>");
+				fprintf(stderr, "OpenGL error in shader linkage \"%s\"|\"%s\"!\n>>>\n%s\n<<<\n", vert_filename.c_str(), frag_filename.c_str(), log_avail ? log_str.c_str() : "<no log available>");
 			} else {
 				// linking success
 				if (log_avail) {
-					assert_log(false, "OpenGL shader linkage log \"%s\"|\"%s\":\n>>>\n%s\n<<<\n", vert_filename.c_str(), frag_filename.c_str(), log_str.c_str());
+					fprintf(stderr, "OpenGL shader linkage log \"%s\"|\"%s\":\n>>>\n%s\n<<<\n", vert_filename.c_str(), frag_filename.c_str(), log_str.c_str());
 				}
 			}
 		}

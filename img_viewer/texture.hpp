@@ -11,7 +11,6 @@ typedef std::string const& strcr;
 #include "glad.h"
 #include "glfw3.h"
 
-#include "logging.hpp"
 #include "vector_util.hpp"
 
 #include "colors.hpp"
