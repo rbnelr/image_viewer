@@ -353,18 +353,49 @@ struct App {
 		return std::move(tex);
 	}
 
+	enum filetype_e {
+		FT_IMAGE_FILE,
+		FT_DIRECTORY,
+		FT_NON_IMAGE_FILE,
+	};
+
 	struct Content {
 		str		name;
 
-		virtual void enable_dynamic_cast() {};
+		virtual filetype_e type () = 0;
+		virtual ~Content () {};
 	};
 
 	struct File : Content {
 		//str	name; // just the file name
+		virtual ~File () {};
+	};
+	struct Non_Image_File : File {
+		filetype_e type () { return FT_NON_IMAGE_FILE; };
+	};
+	struct Image_File : File {
 		string	filepath; // the relative or absolute filepath needed to open the file
 		
-		bool	is_image;
-		iv2		size_px;
+		std::vector<iv2> mip_sizes_px;
+
+		void calc_mip_sizes (iv2 full_size_px) {
+			mip_sizes_px.clear();
+
+			iv2 sz = full_size_px;
+			for (;;) {
+				mip_sizes_px.push_back(sz);
+
+				if (all(sz == 1))
+					break;
+
+				sz = max(sz / 2, 1);
+			}
+		}
+		iv2 get_full_size_px () {
+			return mip_sizes_px[0];
+		}
+
+		filetype_e type () { return FT_IMAGE_FILE; };
 	};
 	struct Directory_Tree : Content {
 		//str		name; // for root: full or relative path of directory +'/',  for non-root: directory name +'/'
@@ -373,6 +404,8 @@ struct App {
 		std::vector< unique_ptr<File> >				files;
 
 		std::vector<Content*>						content;
+
+		filetype_e type () { return FT_DIRECTORY; };
 	};
 
 	void _populate (Directory_Tree* tree, n_find_files::Directory_Tree const& dir, string const& path) {
@@ -388,14 +421,26 @@ struct App {
 			tree->subdirs.emplace_back( std::move(subtree) );
 		}
 		for (auto& fn : dir.filenames) {
-			auto file = make_unique<File>();
-			file->name = fn;
-			file->filepath = path + fn;
+			string filepath = path + fn;
+			
+			iv2 size_px;
+			bool is_image_file = stbi_info(filepath.c_str(), &size_px.x,&size_px.y, nullptr) != 0;
+			
+			unique_ptr<File> file;
 
-			file->is_image = stbi_info(file->filepath.c_str(), &file->size_px.x,&file->size_px.y, nullptr) != 0;
+			if (is_image_file) {
+				auto img = make_unique<Image_File>();
+				img->name = fn;
+				img->filepath = std::move(filepath);
 
-			tree->content.emplace_back(file.get());
+				img->calc_mip_sizes(size_px);
 
+				file = unique_ptr<File>(std::move( img ));
+			} else {
+				file = unique_ptr<File>(std::move( make_unique<Non_Image_File>() ));
+			}
+
+			tree->content.emplace_back( file.get() );
 			tree->files.emplace_back( std::move(file) );
 		}
 	}
@@ -605,38 +650,46 @@ struct App {
 					draw_textured_quad(pos_px, img_onscreen_sz_px, tex, rgba8(255,255,255, (u8)(alpha * 255 +0.5f)));
 				};
 
-				if (dynamic_cast<Directory_Tree*>(c)) {
+				switch (c->type()) {
+					case FT_DIRECTORY: {
 
-					Texture2D* tex = tex_folder_icon.get();
-					draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha);
+						Texture2D* tex = tex_folder_icon.get();
+						draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha);
+					} break;
 
-				} else if (dynamic_cast<File*>(c)) {
-
-					auto* file = (File*)c;
+					case FT_NON_IMAGE_FILE: {
 						
-					if (file->is_image) {
-						
-						//v2 pixel_density = get_texture_centered_in_cell_onscreen_size(file->size_px) / (v2)file->size_px;
-						iv2 onscreen_size_px = get_texture_centered_in_cell_onscreen_size(file->size_px);
+						Texture2D* tex = tex_file_icon.get();
+						draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
+					} break;
 
-						//Texture2D* tex = tex_streamer.query_image_texture(file->filepath, max(pixel_density.x,pixel_density.y));
-						Texture2D* tex = tex_streamer.query_image_texture(file->filepath, onscreen_size_px);
+					case FT_IMAGE_FILE: {
+						auto* img = (Image_File*)c;
+
+						iv2 onscreen_size_px = get_texture_centered_in_cell_onscreen_size(img->get_full_size_px());
+						
+						int mip_level_to_use = 0;
+						for (int i=0; i<(int)img->mip_sizes_px.size(); ++i) {
+							if (any(img->mip_sizes_px[i] < onscreen_size_px)) {
+								mip_level_to_use = i == 0 ? 0 : i -1;
+								break;
+							}
+						}
+
+						iv2 desired_size_px = img->mip_sizes_px[mip_level_to_use];
+
+						Texture2D* tex = tex_streamer.query_image_texture(img->filepath, desired_size_px);
 
 						if (tex) {
-							draw_texture_centered_in_cell(*tex, file->size_px, alpha);
+							draw_texture_centered_in_cell(*tex, img->get_full_size_px(), alpha);
 						} else {
 							Texture2D* tex = tex_loading_file_icon.get();
 							draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
 						}
+					} break;
 
-					} else {
-						
-						Texture2D* tex = tex_file_icon.get();
-						draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
-					}
-
-				} else {
-					assert_log(false);
+					default:
+						assert_log(false);
 				}
 				
 				//bool display_loading_icon = false;
