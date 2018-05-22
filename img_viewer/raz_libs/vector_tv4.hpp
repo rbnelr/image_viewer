@@ -107,5 +107,7 @@ union V4 {
 	
 	VEC_STATIC V4 floor (V4 v) {						return V4(floor(v.x),	floor(v.y),	floor(v.z),	floor(v.w)); }
 	VEC_STATIC V4 ceil (V4 v) {							return V4(ceil(v.x),	ceil(v.y),	ceil(v.z),	ceil(v.w)); }
+
+	VEC_STATIC V4 pow (V4 v, V4 e) {					return V4(pow(v.x,e.x),	pow(v.y,e.y),	pow(v.z,e.z),	pow(v.w,e.w)); }
 	#endif
 #endif

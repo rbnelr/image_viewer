@@ -62,6 +62,10 @@ namespace ImGui {
 
 		return ret;
 	}
+
+	IMGUI_API void TextBox (const char* label, std::string s) { // (pseudo) read-only text box, (can still be copied out of, which is nice, this also allows proper layouting)
+		InputText_str(label, &s);
+	}
 }
 
 struct Imgui_Context {

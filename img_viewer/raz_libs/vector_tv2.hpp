@@ -99,5 +99,7 @@ union V2 {
 
 	VEC_STATIC V2 floor (V2 v) {						return V2(floor(v.x),	floor(v.y)); }
 	VEC_STATIC V2 ceil (V2 v) {							return V2(ceil(v.x),	ceil(v.y)); }
+
+	VEC_STATIC V2 pow (V2 v, V2 e) {					return V2(pow(v.x,e.x),	pow(v.y,e.y)); }
 	#endif
 #endif

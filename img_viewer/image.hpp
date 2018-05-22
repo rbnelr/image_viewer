@@ -105,7 +105,7 @@ public:
 		}
 	}
 
-	static Image2D dumb_fast_downsize (Image2D const& src, iv2 new_size) {
+	static Image2D rescale_nearest (Image2D const& src, iv2 new_size) {
 		
 		auto dst = Image2D::allocate(new_size);
 
@@ -115,6 +115,54 @@ public:
 			}
 		}
 
+		return std::move(dst);
+	}
+	static Image2D rescale_box_filter (Image2D const& src, iv2 new_size) {
+		
+		auto dst = Image2D::allocate(new_size);
+		
+		v2 inv_scale_factor = (v2)src.size / (v2)new_size;
+
+		for (int y=0; y<new_size.y; ++y) {
+			for (int x=0; x<new_size.x; ++x) {
+				// box low and high coords in old pixel coords
+				v2 box_l = (v2)(iv2(x,y) +0) * inv_scale_factor;
+				v2 box_h = (v2)(iv2(x,y) +1) * inv_scale_factor;
+				// src pixels to consider
+				iv2 box_l_px = (iv2)floor(box_l);
+				iv2 box_h_px = min( (iv2)ceil(box_h), src.size ); // float imprecision, prevent invalid src pixel access
+				//// how much the low and high pixel rows and columns count (box_l.x == 1.5 -> left column of pixel box considered only counts 0.5)
+				//v2 box_l_factor = 1 -(box_l -(flt)box_l_px.x);
+				//v2 box_h_factor = 1 -((flt)box_h_px.x -box_h);
+
+				v4 accum = 0;
+
+				for (int src_y=box_l_px.y; src_y<box_h_px.y; ++src_y) {
+					for (int src_x=box_l_px.x; src_x<box_h_px.x; ++src_x) {
+						v4 val = (v4)src.get_pixel(iv2(src_x,src_y)) / 255;
+						
+						val = v4(to_linear(val.xyz()), val.w);
+
+						//if (src_x == box_l_px.x)
+						//	val *= box_l_factor.x;
+						//if (src_x == (box_h_px.x -1))
+						//	val *= box_h_factor.x;
+
+						accum += val;
+					}
+				}
+
+				//accum /= inv_scale_factor.x * inv_scale_factor.y;
+				accum /= (flt)(box_h_px -box_l_px).x * (flt)(box_h_px -box_l_px).y;
+
+				accum = clamp(accum, 0, 1);
+
+				accum = v4(to_srgb(accum.xyz()), accum.w);
+
+				dst.get_pixel(x,y) = (rgba8)(accum * 255 +0.5f);
+			}
+		}
+	
 		return std::move(dst);
 	}
 };

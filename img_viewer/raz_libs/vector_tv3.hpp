@@ -108,5 +108,7 @@ union V3 {
 	
 	VEC_STATIC V3 floor (V3 v) {						return V3(floor(v.x),	floor(v.y),	floor(v.z)); }
 	VEC_STATIC V3 ceil (V3 v) {							return V3(ceil(v.x),	ceil(v.y),	ceil(v.z)); }
+
+	VEC_STATIC V3 pow (V3 v, V3 e) {					return V3(pow(v.x,e.x),	pow(v.y,e.y),	pow(v.z,e.z)); }
 	#endif
 #endif

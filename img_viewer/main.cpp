@@ -113,7 +113,7 @@ struct Texture_Streamer {
 			try {
 				res.src_img = Image2D::load_from_file(job.filepath);
 
-				res.src_img = Image2D::dumb_fast_downsize(res.src_img, job.size_px);
+				res.src_img = Image2D::rescale_box_filter(res.src_img, job.size_px);
 
 			} catch (Expt_File_Load_Fail const& e) {
 				//assert_log(false, e.what()); // is not threadsafe!
@@ -205,7 +205,7 @@ struct Texture_Streamer {
 				cur_val %= ARRLEN(sz_in_mb);
 			}
 
-			static flt range = 1024*6;
+			static flt range = 16;
 			ImGui::DragFloat("memory_size_plot_range", &range, 10);
 
 			ImGui::PushItemWidth(-1);
@@ -622,8 +622,15 @@ struct App {
 
 		tex_streamer.begin_frame();
 
+		static ImGuiTextFilter list_files_filter;
+		
+		bool list_files = ImGui::CollapsingHeader("file_list");
+		if (list_files) {
+			list_files_filter.Draw();
+		}
+
 		for (int content_i=0; content_i<(dir ? (int)dir->content.size() : 0); content_i++) {
-			auto img_instance = [&] (v2 pos_center_rel, flt alpha) {
+			auto img_instance = [&] (v2 pos_center_rel, flt alpha, bool is_original_instance) {
 				if (	pos_center_rel.y < -grid_sz_cells.y/2 -0.5f ||
 						pos_center_rel.y > +grid_sz_cells.y/2 +0.5f)
 					return;
@@ -650,17 +657,32 @@ struct App {
 					draw_textured_quad(pos_px, img_onscreen_sz_px, tex, rgba8(255,255,255, (u8)(alpha * 255 +0.5f)));
 				};
 
+				if (list_files)
+					ImGui::PushID(content_i);
+
 				switch (c->type()) {
 					case FT_DIRECTORY: {
 
 						Texture2D* tex = tex_folder_icon.get();
 						draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha);
+
+						if (list_files && is_original_instance && list_files_filter.PassFilter(c->name.c_str())) {
+							ImGui::PushItemWidth(-100);
+							ImGui::TextBox("##name", c->name);
+							ImGui::PopItemWidth();
+						}
 					} break;
 
 					case FT_NON_IMAGE_FILE: {
 						
 						Texture2D* tex = tex_file_icon.get();
 						draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
+
+						if (list_files && is_original_instance && list_files_filter.PassFilter(c->name.c_str())) {
+							ImGui::PushItemWidth(-100);
+							ImGui::TextBox("##name", c->name);
+							ImGui::PopItemWidth();
+						}
 					} break;
 
 					case FT_IMAGE_FILE: {
@@ -686,11 +708,24 @@ struct App {
 							Texture2D* tex = tex_loading_file_icon.get();
 							draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
 						}
+
+						if (list_files && is_original_instance && list_files_filter.PassFilter(c->name.c_str())) {
+							ImGui::PushItemWidth(-100);
+							ImGui::TextBox("##name", c->name);
+							ImGui::PopItemWidth();
+
+							ImGui::SameLine();
+							auto& sz = img->get_full_size_px();
+							ImGui::TextBox("##res", prints("%4d x %4d", sz.x,sz.y) );
+						}
 					} break;
 
 					default:
 						assert_log(false);
 				}
+
+				if (list_files)
+					ImGui::PopID();
 				
 				//bool display_loading_icon = false;
 				//if (display_loading_icon) {
@@ -710,16 +745,16 @@ struct App {
 			v2 pos_center_rel = v2(remainder,quotient) -view_offs;
 
 			assert_log((out_of_bounds_l +out_of_bounds_r) <= 1);
-			img_instance(pos_center_rel, content_i == (int)roundf(view_coord) ? 1 : 1 -out_of_bounds_l -out_of_bounds_r);
+			img_instance(pos_center_rel, content_i == (int)roundf(view_coord) ? 1 : 1 -out_of_bounds_l -out_of_bounds_r, true);
 
 			//ImGui::Value("content_i", content_i);
 			//ImGui::Value("(int)roundf(view_coord)", (int)roundf(view_coord));
 
 			if (out_of_bounds_l > 0) {
-				img_instance((pos_center_rel -v2(-grid_sz_cells.x,1)), out_of_bounds_l);
+				img_instance((pos_center_rel -v2(-grid_sz_cells.x,1)), out_of_bounds_l, false);
 			}
 			if (out_of_bounds_r > 0) {
-				img_instance((pos_center_rel +v2(-grid_sz_cells.x,1)), out_of_bounds_r);
+				img_instance((pos_center_rel +v2(-grid_sz_cells.x,1)), out_of_bounds_r, false);
 			}
 
 		}
