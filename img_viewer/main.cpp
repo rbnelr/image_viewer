@@ -96,7 +96,6 @@ struct App {
 
 	unique_ptr<Texture2D>	tex_folder_icon;
 	unique_ptr<Texture2D>	tex_loading_icon;
-	unique_ptr<Texture2D>	tex_loading_file_icon;
 	unique_ptr<Texture2D>	tex_file_icon;
 	unique_ptr<Texture2D>	tex_file_icon_GIF;
 	unique_ptr<Texture2D>	tex_file_icon_mp4;
@@ -121,7 +120,7 @@ struct App {
 		auto tex = Texture2D::generate();
 		tex.upload( img.pixels, img.size );
 
-		tex.gen_mipmaps();
+		//tex.gen_mipmaps();
 		tex.set_filtering_mipmapped();
 		tex.set_border_clamp();
 
@@ -204,14 +203,13 @@ struct App {
 		}
 	}
 
-	Texture_Streamer				tex_streamer;
+	Texture_Streamer			tex_streamer;
 	unique_ptr<Directory_Tree>	viewed_dir = nullptr;
 
 	void init () {
 		glfwSwapInterval(swap_interval);
 
 		tex_loading_icon =		make_unique<Texture2D>( simple_load_texture("assets_src/loading_icon.png") );
-		tex_loading_file_icon =	make_unique<Texture2D>( simple_load_texture("assets_src/loading_file_icon.png") );
 		tex_folder_icon =		make_unique<Texture2D>( simple_load_texture("assets_src/folder_icon.png") );
 		tex_file_icon =			make_unique<Texture2D>( simple_load_texture("assets_src/file_icon.png") );
 		tex_file_icon_GIF =		make_unique<Texture2D>( simple_load_texture("assets_src/file_icon_GIF.png") );
@@ -221,8 +219,8 @@ struct App {
 	}
 
 	void gui () {
-		//static str viewed_dir_path_input_text = "E:/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
-		static str viewed_dir_path_input_text = "C:/Users/uidn7241/Desktop/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
+		static str viewed_dir_path_input_text = "P:/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
+		//static str viewed_dir_path_input_text = "C:/Users/uidn7241/Desktop/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
 		
 		if (!ImGui::CollapsingHeader("viewed_dir_path", ImGuiTreeNodeFlags_DefaultOpen))
 			return;
@@ -290,7 +288,7 @@ struct App {
 
 		ImGui::SameLine();
 		ImGui::TextColored(load_ok ? col_ok : col_err, load_ok ? "OK" : load_msg.c_str());
-
+	
 	}
 
 	void file_grid (Directory_Tree* dir, int left_bar_size, iv2 mouse_pos_px) {
@@ -346,47 +344,33 @@ struct App {
 		static flt file_icon_alpha = 0.12f;
 
 		static flt loading_icon_sz = 0.25f;
-		static flt loading_icon_alpha = 0.8f;
+		static flt loading_icon_alpha = 0.5f;
 		
 		if (ImGui::CollapsingHeader("file_grid", ImGuiTreeNodeFlags_DefaultOpen)) {
 			
-			// This allows me to save one of the following options shown through imgui to be saved to disk and automaticly loaded on the next start of the app (i love how crazy powerful coding like this can be!)
-			#define IMGUI_SAVABLE_DRAGT(T, id, valptr, ...) do {											\
-					if (frame_i == 0)																		\
-						load_fixed_size_binary_file("saves/imgui/" id ".bin", valptr, sizeof(*valptr));		\
-																											\
-					bool save = ImGui::Button("##" id);														\
-																											\
-					ImGui::SameLine();																		\
-					ImGui::T(id, valptr, __VA_ARGS__);														\
-																											\
-					if (save)																				\
-						write_fixed_size_binary_file("saves/imgui/" id ".bin", valptr, sizeof(*valptr));	\
-				} while(0)
+			IMGUI_SAVEABLE(		"zoom_smoothing_frames", &zoom_smoothing_frames);
+			ImGui::DragInt(		"zoom_smoothing_frames", &zoom_smoothing_frames, 1.0f / 40);
+			IMGUI_SAVEABLE(		"zoom_step", &zoom_step);
+			ImGui::DragFloat(	"zoom_step", &zoom_step, 0.01f / 40);
 			
-			IMGUI_SAVABLE_DRAGT( DragInt,	"zoom_smoothing_frames", &zoom_smoothing_frames, 1.0f / 40);
-			IMGUI_SAVABLE_DRAGT( DragFloat,	"zoom_step", &zoom_step, 0.01f / 40);
+			IMGUI_SAVEABLE(		"zoom_anim_frames_remain", &zoom_smoothing_frames_remain);
+			ImGui::DragInt(		"zoom_anim_frames_remain", &zoom_smoothing_frames_remain);
+			IMGUI_SAVEABLE(		"zoom_multiplier_target", &zoom_multiplier_target);
+			ImGui::DragFloat(	"zoom_multiplier_target", &zoom_multiplier_target);
+			IMGUI_SAVEABLE(		"zoom_multiplier", &zoom_multiplier);
+			ImGui::DragFloat(	"zoom_multiplier", &zoom_multiplier);
 			
-			IMGUI_SAVABLE_DRAGT( DragInt,	"zoom_anim_frames_remain", &zoom_smoothing_frames_remain);
-			IMGUI_SAVABLE_DRAGT( DragFloat,	"zoom_multiplier_target", &zoom_multiplier_target);
-			IMGUI_SAVABLE_DRAGT( DragFloat,	"zoom_multiplier", &zoom_multiplier);
+			IMGUI_SAVEABLE(		"debug_view_size_multiplier", &debug_view_size_multiplier);
+			ImGui::DragFloat(	"debug_view_size_multiplier", &debug_view_size_multiplier, 1.0f/300, 0.01f);
 			
-			IMGUI_SAVABLE_DRAGT( DragFloat,	"debug_view_size_multiplier", &debug_view_size_multiplier, 1.0f/300, 0.01f);
-			
-			IMGUI_SAVABLE_DRAGT( DragFloat2,	"view_coord", &view_coord.x, 1.0f / 50);
+			IMGUI_SAVEABLE(		"view_coord", &view_coord.x);
+			ImGui::DragFloat2(	"view_coord", &view_coord.x, 1.0f / 50);
 
 			ImGui::DragFloat("file_icon_sz", &file_icon_sz, 0.01f);
 			ImGui::DragFloat("file_icon_alpha", &file_icon_alpha, 0.01f);
 
 			ImGui::DragFloat("loading_icon_sz", &loading_icon_sz, 0.01f);
 			ImGui::DragFloat("loading_icon_alpha", &loading_icon_alpha, 0.01f);
-		}
-
-		static ImGuiTextFilter list_files_filter;
-		
-		bool list_files = ImGui::CollapsingHeader("file_list");
-		if (list_files) {
-			list_files_filter.Draw();
 		}
 
 		v2 mouse_coord;
@@ -418,6 +402,18 @@ struct App {
 
 		tex_streamer.queries_begin();
 
+		static ImGuiTextFilter list_files_filter;
+
+		/* // Should list all files not just the ones visible
+		bool list_files = ImGui::CollapsingHeader("file_list");
+		if (list_files) {
+			list_files_filter.Draw();
+		}
+		*/
+
+		static bool image_window_open = false;
+		static Image_File* image_window_img = nullptr;
+		
 		for (int content_i=0; content_i<(dir ? (int)dir->content.size() : 0); content_i++) {
 			auto img_instance = [&] (v2 pos_center_rel, flt alpha, bool is_original_instance) {
 				if (	pos_center_rel.y < -grid_sz_cells.y/2 -0.5f ||
@@ -449,8 +445,10 @@ struct App {
 					draw_textured_quad(pos_px, img_onscreen_sz_px, tex, rgba8(255,255,255, (u8)(alpha * 255 +0.5f)));
 				};
 
+				/*
 				if (list_files)
 					ImGui::PushID(content_i);
+				*/
 
 				switch (c->type()) {
 					case FT_DIRECTORY: {
@@ -458,11 +456,13 @@ struct App {
 						Texture2D* tex = tex_folder_icon.get();
 						draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha);
 
+						/*
 						if (list_files && is_original_instance && list_files_filter.PassFilter(c->name.c_str())) {
 							ImGui::PushItemWidth(-100);
 							ImGui::TextBox("##name", c->name);
 							ImGui::PopItemWidth();
 						}
+						*/
 					} break;
 
 					case FT_NON_IMAGE_FILE: {
@@ -495,11 +495,13 @@ struct App {
 
 						draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
 
+						/*
 						if (list_files && is_original_instance && list_files_filter.PassFilter(c->name.c_str())) {
 							ImGui::PushItemWidth(-100);
 							ImGui::TextBox("##name", c->name);
 							ImGui::PopItemWidth();
 						}
+						*/
 					} break;
 
 					case FT_IMAGE_FILE: {
@@ -508,24 +510,46 @@ struct App {
 						iv2 onscreen_size_px = get_texture_centered_in_cell_onscreen_size(img->size_px);
 						
 						auto* tex = tex_streamer.query(img->filepath, onscreen_size_px, img->size_px);
+						
+						{
+							v2 rect_l = view_center +pos_center_rel_px -cell_sz/2;
+							v2 rect_h = view_center +pos_center_rel_px +cell_sz/2;
+							
+							bool highlight = tex->debug_is_highlighted;
+							
+							v2 mouse = (v2)mouse_pos_px +0.5f;
 
-						flt px_dens = tex->get_cached_pixel_density(onscreen_size_px);
+							if (all(mouse >= rect_l && mouse <= rect_h)) {
+								highlight = true;
+								if (rmb.went_down) {
+									image_window_open = true;
+									image_window_img = img;
+								}
+							}
+							
+							if (highlight)
+								emit_overlay_rect_outline(rect_l,rect_h, rgba8(0,255,0,255));
+						}
+
+						bool image_fully_loaded = tex->all_mips_displayable();
+
+						flt px_dens = tex->get_displayable_pixel_density(onscreen_size_px);
 						if (px_dens == 0) {
 
-							Texture2D* tex = tex_loading_file_icon.get();
+							Texture2D* tex = tex_file_icon.get();
 							draw_texture_centered_in_cell(*tex, tex->get_size_px(), alpha * file_icon_alpha);
 
 						} else {
 							
 							draw_texture_centered_in_cell(*tex->tex, img->size_px, alpha);
-
-							if (px_dens < 1) { // display_loading_icon if some mips of the texture are loaded, but the mip that is at least onscreen_size_px is not (ie. displayed pixel density < 1, ie. image is still blurry)
-								v2 pos_px = view_center +pos_center_rel_px +cell_sz * (-0.5f +(1 -loading_icon_sz));
-								draw_textured_quad(pos_px, cell_sz * loading_icon_sz, *tex_loading_icon.get(), rgba8(255,255,255, (int)(alpha * loading_icon_alpha * 255.0f +0.5f)));
-							}
 						}
 
+						if (!image_fully_loaded && px_dens < 1) { // display_loading_icon if some mips of the texture are loaded, but the mip that is at least onscreen_size_px is not (ie. displayed pixel density < 1, ie. image is still blurry)
+							v2 pos_px = view_center +pos_center_rel_px +cell_sz * (-0.5f +(1 -loading_icon_sz));
+							draw_textured_quad(pos_px, cell_sz * loading_icon_sz, *tex_loading_icon.get(), rgba8(255,255,255, (int)(alpha * loading_icon_alpha * 255.0f +0.5f)));
+						}
 
+						/*
 						if (list_files && is_original_instance && list_files_filter.PassFilter(c->name.c_str())) {
 							ImGui::PushItemWidth(-100);
 							ImGui::TextBox("##name", c->name);
@@ -535,15 +559,17 @@ struct App {
 							auto& sz = img->size_px;
 							ImGui::TextBox("##res", prints("%4d x %4d", sz.x,sz.y) );
 						}
+						*/
 					} break;
 
 					default:
 						assert(false);
 				}
 
+				/*
 				if (list_files)
 					ImGui::PopID();
-				
+				*/
 			};
 
 			flt rel_indx = (flt)content_i -dragged_view_coord.x;
@@ -569,6 +595,14 @@ struct App {
 		}
 		
 		tex_streamer.queries_end();
+
+		if (image_window_open) {
+			if (ImGui::Begin(prints("Image: %s###image_window", image_window_img->filepath.c_str()).c_str(), &image_window_open)) {
+				
+				tex_streamer.imgui_texture_info(image_window_img->filepath);
+			}
+			ImGui::End();
+		}
 	}
 
 	struct Solid_Col_Vertex {
@@ -608,6 +642,8 @@ struct App {
 		overlay_tris.push_back({b,c,a});
 		overlay_tris.push_back({a,c,d});
 	}
+
+	bool draw_wireframe = false;
 
 	void draw_textured_quad (v2 pos_px, v2 sz_px, Texture2D const& tex, rgba8 col=rgba8(255)) {
 
@@ -677,6 +713,9 @@ struct App {
 
 		static GLint tex_loc = glGetUniformLocation(shad->prog, "tex");
 		glUniform1i(tex_loc, tex_unit);
+
+		static GLint draw_wireframe_loc = glGetUniformLocation(shad->prog, "draw_wireframe");
+		glUniform1i(draw_wireframe_loc, draw_wireframe);
 
 		bind_texture(tex_unit, tex);
 		
@@ -758,6 +797,8 @@ struct App {
 			}
 		}
 
+		ImGui::Checkbox("draw_wireframe", &draw_wireframe);
+
 		{
 			auto tmp = ImGui::GetWindowSize();
 			imgui_left_bar_size = (iv2)v2(tmp.x,tmp.y);
@@ -775,8 +816,8 @@ struct App {
 			static bool show_demo_wnd = false;
 			ImGui::Checkbox("ShowDemoWindow", &show_demo_wnd);
 			if (show_demo_wnd) {
-				ImGui::SetNextWindowBgAlpha(1);
-				ImGui::ShowDemoWindow();
+				//ImGui::SetNextWindowBgAlpha(1);
+				ImGui::ShowDemoWindow(&show_demo_wnd);
 			}
 		}
 
@@ -819,10 +860,9 @@ struct App {
 
 		render_all(mouse_pos_px);
 
-		imgui_context.draw(disp.framebuffer_size_px);
-
-
 		draw_triangles_solid(overlay_tris);
+
+		imgui_context.draw(disp.framebuffer_size_px);
 
 		// display to screen
 		glfwSwapBuffers(disp.window);
@@ -851,7 +891,11 @@ void glfw_refresh_callback (GLFWwindow* window) { // refresh callback so window 
 	if (glfw_refresh_callback_called_inside_frame_call)
 		return; // prevent recursive calls of frame, this once happened when a failed assert tried to open a messagebox
 
+	glfw_refresh_callback_called_inside_frame_call = true;
+
 	app.frame();
+
+	glfw_refresh_callback_called_inside_frame_call = false;
 }
 
 int main (int argc, char** argv) {

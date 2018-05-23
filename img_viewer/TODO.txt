@@ -1,13 +1,9 @@
-design ideas:
- implement dragging around
-
-visual:
- fix mipmaps not being generated
+ implement actual image filtering
  
- if filtering is still ugly, look at filtering techniques
-
-functionality
-
+ arrow keyboard navigation
+ 
+ when zoomed in on image:
+  n/N counter to know at which image you are
 
 DONE:
  test my cool image viewer approach
@@ -26,3 +22,5 @@ DONE:
   -> always downsize image to exactly the size it is viewed at and evict textures as soon as they disappear or are viewed at different sizes
    -> needed to cancel jobs (and ignore job results that are no longer needed (ie. should have been canceled but were already in processing)) to not create giant workloads when zooming
    -> images only start being visible after zooming has stopped and there is a very big workload constantly -> not a good system
+ 
+ implemented dragging around

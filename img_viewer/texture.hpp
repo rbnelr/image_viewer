@@ -22,7 +22,6 @@ class Texture2D {
 	GLuint	gpu_handle = 0;
 	iv2		size_px = 0;
 
-
 public:
 
 	GLuint	get_gpu_handle () const {	return gpu_handle; }
@@ -58,17 +57,35 @@ public:
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size_px.x,size_px.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 
 		// no mips
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-		// nearest filtering
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		set_active_mips(0, 0);
 
 		glBindTexture(GL_TEXTURE_2D, 0);
 	}
+	/* // doesnt work ??
 	void gen_mipmaps () {
 		glBindTexture(GL_TEXTURE_2D, gpu_handle);
 		glGenerateMipmap(GL_TEXTURE_2D);
+		glBindTexture(GL_TEXTURE_2D, 0);
+	}
+	*/
+
+	void upload_mip (int mip_indx, rgba8* pixels, iv2 size_px) {
+		this->size_px = -1;
+
+		glBindTexture(GL_TEXTURE_2D, gpu_handle);
+
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+		glTexImage2D(GL_TEXTURE_2D, mip_indx, GL_RGBA8, size_px.x,size_px.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+
+		glBindTexture(GL_TEXTURE_2D, 0);
+	}
+	void set_active_mips (int first, int last) {
+		glBindTexture(GL_TEXTURE_2D, gpu_handle);
+
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, first);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, last);
+
 		glBindTexture(GL_TEXTURE_2D, 0);
 	}
 
@@ -89,6 +106,17 @@ public:
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	}
 
+	static void delete_mipmap (unique_ptr<Texture2D>* tex, int mip, iv2 size_px) {
+		auto old_tex = std::move(tex);
+
+		*tex = make_unique<Texture2D>(std::move( generate() ));
+
+		glBindTexture(GL_TEXTURE_2D, (*tex)->gpu_handle);
+
+		//glCopyTexSubImage2D(GL_TEXTURE_2D, mip, 0,0, 0,0, size_px.x,size_px.y);
+
+		glBindTexture(GL_TEXTURE_2D, 0);
+	}
 };
 void swap (Texture2D& l, Texture2D& r) {
 	std::swap(l.gpu_handle, r.gpu_handle);

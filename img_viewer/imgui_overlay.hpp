@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 #include "glfw3.h"
 #include "imgui.cpp"
@@ -15,6 +16,52 @@
 #include "colors.hpp"
 
 #include "defer.hpp"
+
+// Show a slim button that saves a value to disk which is then automaticly loaded on the next start of the app
+void imgui_saveable (cstr id, void* pval, uptr val_size) {
+	
+	ImGui::PushID(id);
+
+	auto imgui_id = ImGui::GetID("##");
+
+	#if 1
+	auto* state = ImGui::GetStateStorage();
+	bool first_call_with_this_id = state->GetBool(imgui_id, false) == false;
+	if (first_call_with_this_id) {
+		state->SetBool(imgui_id, true);
+	}
+	#else // c++ hashmap is constant time (imgui StateStorage does a linear search on GetBool and SetBool), but using imgui seems appropriate
+	struct ImGuiID_Wrapper {
+		ImGuiID	val;
+
+		bool operator== (const ImGuiID_Wrapper& r) const { return val == r.val; }
+	};
+	struct Hasher {
+		std::size_t operator()(const ImGuiID_Wrapper& id) const { return (std::size_t)id.val; } // ImGuiID is already a hash
+	};
+
+	static std::unordered_map<ImGuiID_Wrapper, bool, Hasher> called_before;
+
+	auto it = called_before.find(ImGuiID_Wrapper{imgui_id});
+	bool first_call_with_this_id = it == called_before.end();
+	if (first_call_with_this_id) {
+		called_before.emplace(ImGuiID_Wrapper{imgui_id}, true);
+	}
+	#endif
+
+	if (first_call_with_this_id)
+		load_fixed_size_binary_file(prints("saves/imgui/%s.bin", id), pval, val_size); // the path generated here does not respect previous ImGui::PushID() calls, so you need to make sure the id string itself is unique the save restore will break
+
+	bool save = ImGui::Button("##");
+
+	ImGui::PopID();
+
+	if (save)
+		write_fixed_size_binary_file(prints("saves/imgui/%s.bin", id), pval, val_size);
+
+	ImGui::SameLine();
+};
+#define IMGUI_SAVEABLE(id, pval) imgui_saveable(id, pval, sizeof(*(pval)))
 
 namespace ImGui {
 	IMGUI_API void Value (const char* prefix, v2 v) {
@@ -155,6 +202,7 @@ struct Imgui_Context {
 
 			tex = Texture2D::generate();
 			tex.upload(img.pixels, img.size);
+			tex.set_filtering_nearest();
 
 			io.Fonts->TexID = (void*)&tex;
 		}
@@ -201,6 +249,9 @@ struct Imgui_Context {
 
 		GLint loc_screen_dim = glGetUniformLocation(shad.prog, "screen_dim");
 		glUniform2f(loc_screen_dim, (flt)disp_dim.x,(flt)disp_dim.y);
+
+		static GLint draw_wireframe_loc = glGetUniformLocation(shad.prog, "draw_wireframe");
+		glUniform1i(draw_wireframe_loc, false);
 
 		ImDrawData* draw_data = ImGui::GetDrawData();
 

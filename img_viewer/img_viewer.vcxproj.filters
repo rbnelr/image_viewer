@@ -88,6 +88,9 @@
     <ClInclude Include="texture_streamer.hpp">
       <Filter>app_code</Filter>
     </ClInclude>
+    <ClInclude Include="deps\dear_imgui\imgui_internal.h">
+      <Filter>deps</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\solid_col.vert">
@@ -139,6 +142,18 @@
       <Filter>assets_src</Filter>
     </Image>
     <Image Include="assets_src\loading_icon.png">
+      <Filter>assets_src</Filter>
+    </Image>
+    <Image Include="assets_src\file_icon.png">
+      <Filter>assets_src</Filter>
+    </Image>
+    <Image Include="assets_src\file_icon_GIF.png">
+      <Filter>assets_src</Filter>
+    </Image>
+    <Image Include="assets_src\file_icon_mp4.png">
+      <Filter>assets_src</Filter>
+    </Image>
+    <Image Include="assets_src\loading_file_icon.png">
       <Filter>assets_src</Filter>
     </Image>
   </ItemGroup>

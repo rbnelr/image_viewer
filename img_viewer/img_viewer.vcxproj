@@ -154,6 +154,7 @@
       <FunctionLevelLinking Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</FunctionLevelLinking>
       <FunctionLevelLinking Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</FunctionLevelLinking>
     </ClCompile>
+    <ClInclude Include="deps\dear_imgui\imgui_internal.h" />
     <ClInclude Include="deps\stb\stb_image.h" />
     <ClInclude Include="find_files.hpp" />
     <ClInclude Include="glad_helper.hpp" />
@@ -191,7 +192,11 @@
     <Text Include="TODO.txt" />
   </ItemGroup>
   <ItemGroup>
+    <Image Include="assets_src\file_icon.png" />
+    <Image Include="assets_src\file_icon_GIF.png" />
+    <Image Include="assets_src\file_icon_mp4.png" />
     <Image Include="assets_src\folder_icon.png" />
+    <Image Include="assets_src\loading_file_icon.png" />
     <Image Include="assets_src\loading_icon.png" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
