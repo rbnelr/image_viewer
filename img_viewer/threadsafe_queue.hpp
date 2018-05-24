@@ -71,7 +71,7 @@ public:
 	void iterate_queue_front_to_back (FOREACH callback) { // front == next to be popped, back == most recently pushed
 		std::lock_guard<std::mutex> lock(m);
 		
-		for (auto& it=q.begin(); it!=q.end(); ++it) {
+		for (auto it=q.begin(); it!=q.end(); ++it) {
 			callback(*it);
 		}
 	}
@@ -79,11 +79,10 @@ public:
 	void iterate_queue_back_to_front (FOREACH callback) { // front == next to be popped, back == most recently pushed
 		std::lock_guard<std::mutex> lock(m);
 
-		for (auto& it=q.rbegin(); it!=q.rend(); ++it) {
+		for (auto it=q.rbegin(); it!=q.rend(); ++it) {
 			callback(*it);
 		}
 	}
-
 
 	template <typename NEED_TO_CANCEL>
 	void cancel (NEED_TO_CANCEL need_to_cancel) {
@@ -96,6 +95,22 @@ public:
 				++it;
 			}
 		}
+	}
+	void cancel_all () {
+		std::lock_guard<std::mutex> lock(m);
+
+		q.clear();
+	}
+
+	template <typename FOREACH>
+	void cancel_all_and_call_foreach (FOREACH func) {
+		std::lock_guard<std::mutex> lock(m);
+
+		for (auto it=q.begin(); it!=q.end(); ++it) {
+			func(*it);
+		}
+
+		q.clear();
 	}
 
 private:

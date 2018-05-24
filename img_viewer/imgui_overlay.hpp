@@ -18,7 +18,7 @@
 #include "defer.hpp"
 
 // Show a slim button that saves a value to disk which is then automaticly loaded on the next start of the app
-void imgui_saveable (cstr id, void* pval, uptr val_size) {
+bool imgui_saveable (cstr id, void* pval, uptr val_size) {
 	
 	ImGui::PushID(id);
 
@@ -60,6 +60,8 @@ void imgui_saveable (cstr id, void* pval, uptr val_size) {
 		write_fixed_size_binary_file(prints("saves/imgui/%s.bin", id), pval, val_size);
 
 	ImGui::SameLine();
+
+	return first_call_with_this_id;
 };
 #define IMGUI_SAVEABLE(id, pval) imgui_saveable(id, pval, sizeof(*(pval)))
 

@@ -182,7 +182,9 @@ struct App {
 			
 			iv2 size_px;
 			bool is_image_file = stbi_info(filepath.c_str(), &size_px.x,&size_px.y, nullptr) != 0;
-			
+			//if (!is_image_file)
+			//	printf("%s\n", stbi_failure_reason());
+
 			unique_ptr<File> file;
 
 			if (is_image_file) {
@@ -219,7 +221,7 @@ struct App {
 	}
 
 	void gui () {
-		static str viewed_dir_path_input_text = "P:/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
+		static str viewed_dir_path_input_text = "P:/img_viewer_sample_files/test"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
 		//static str viewed_dir_path_input_text = "C:/Users/uidn7241/Desktop/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
 		
 		if (!ImGui::CollapsingHeader("viewed_dir_path", ImGuiTreeNodeFlags_DefaultOpen))
@@ -353,13 +355,16 @@ struct App {
 			IMGUI_SAVEABLE(		"zoom_step", &zoom_step);
 			ImGui::DragFloat(	"zoom_step", &zoom_step, 0.01f / 40);
 			
-			IMGUI_SAVEABLE(		"zoom_anim_frames_remain", &zoom_smoothing_frames_remain);
 			ImGui::DragInt(		"zoom_anim_frames_remain", &zoom_smoothing_frames_remain);
-			IMGUI_SAVEABLE(		"zoom_multiplier_target", &zoom_multiplier_target);
-			ImGui::DragFloat(	"zoom_multiplier_target", &zoom_multiplier_target);
-			IMGUI_SAVEABLE(		"zoom_multiplier", &zoom_multiplier);
-			ImGui::DragFloat(	"zoom_multiplier", &zoom_multiplier);
 			
+			bool changed = false;
+			changed = IMGUI_SAVEABLE(	"zoom_multiplier_target", &zoom_multiplier_target) || changed;
+			changed = ImGui::DragFloat(	"zoom_multiplier_target", &zoom_multiplier_target) || changed;
+			
+			if (changed)
+				zoom_multiplier = zoom_multiplier_target;
+			ImGui::DragFloat(	"zoom_multiplier", &zoom_multiplier);
+
 			IMGUI_SAVEABLE(		"debug_view_size_multiplier", &debug_view_size_multiplier);
 			ImGui::DragFloat(	"debug_view_size_multiplier", &debug_view_size_multiplier, 1.0f/300, 0.01f);
 			
@@ -412,7 +417,9 @@ struct App {
 		*/
 
 		static bool image_window_open = false;
-		static Image_File* image_window_img = nullptr;
+		static string image_window_img;
+		if (!image_window_open)
+			image_window_img = "<null>";
 		
 		for (int content_i=0; content_i<(dir ? (int)dir->content.size() : 0); content_i++) {
 			auto img_instance = [&] (v2 pos_center_rel, flt alpha, bool is_original_instance) {
@@ -523,9 +530,10 @@ struct App {
 								highlight = true;
 								if (rmb.went_down) {
 									image_window_open = true;
-									image_window_img = img;
+									image_window_img = img->filepath;
 								}
 							}
+							highlight = highlight || image_window_img.compare(img->filepath) == 0;
 							
 							if (highlight)
 								emit_overlay_rect_outline(rect_l,rect_h, rgba8(0,255,0,255));
@@ -597,9 +605,9 @@ struct App {
 		tex_streamer.queries_end();
 
 		if (image_window_open) {
-			if (ImGui::Begin(prints("Image: %s###image_window", image_window_img->filepath.c_str()).c_str(), &image_window_open)) {
+			if (ImGui::Begin(prints("Image: %s###image_window", image_window_img.c_str()).c_str(), &image_window_open)) {
 				
-				tex_streamer.imgui_texture_info(image_window_img->filepath);
+				tex_streamer.imgui_texture_info(image_window_img);
 			}
 			ImGui::End();
 		}

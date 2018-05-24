@@ -4,6 +4,8 @@
 
 // priority defined as float in [0,+inf], lower is higher prio (+inf is a valid value)
 struct Texture_Streamer {
+	
+	struct Cached_Texture;
 
 	struct Mipmap {
 		enum state_e { UNCACHED=0, CACHING, CACHED }; // UNCACHED = not loaded at all,  CACHING = in job queue or in processing or in results queue,  CACHED = uplaoded to texture
@@ -13,10 +15,11 @@ struct Texture_Streamer {
 		iv2			size_px;
 
 		state_e		state;
+		state_e		desired_state; // only for displaying in imgui for debugging purposes
 
-		state_e		desired_state; // only for displaying in imgui for debugging purposed
-
-		Mipmap (flt p, iv2 sz, state_e s): priority{p}, size_px{sz}, state{s}, desired_state{UNCACHED} {};
+		// these are needed because we work with 'std::vector<Mipmap*> mips_sorted' and finding the texture that each Mipmap belongs to was a performance issue in debug mode
+		int				mip_indx;
+		std::map< str, unique_ptr<Cached_Texture> >::value_type*	tex; // texture this mipmap belongs to
 
 		u64 get_memory_size () const {
 			return (u64)size_px.y * (u64)size_px.x * sizeof(rgba8);
@@ -37,6 +40,11 @@ struct Texture_Streamer {
 		}
 
 		void imgui () {
+			if (tex)
+				ImGui::Value("tex.gpu_handle", tex->get_gpu_handle());
+			else
+				ImGui::Text("<null>");
+
 			ImGui::Value("tex_displayable_mips", tex_displayable_mips);
 				
 			if (ImGui::TreeNode(prints("mips[%d]###mips", (int)mips.size()).c_str())) {
@@ -71,13 +79,29 @@ struct Texture_Streamer {
 			return tex_displayable_mips == (int)mips.size();
 		}
 
-		static unique_ptr<Texture2D> gen_texture () {
+		unique_ptr<Texture2D> gen_texture () {
 			auto tex = make_unique<Texture2D>(std::move( Texture2D::generate() ));
 
 			tex->set_filtering_mipmapped();
 			tex->set_border_clamp();
 
+			tex->set_active_mips(to_opengl_mip_index(0), to_opengl_mip_index(0));
+
 			return tex;
+		}
+
+		void update_displayable_mips () {
+			int counter = 0;
+			for (auto& m : mips) {
+				if (m.state != Mipmap::CACHED) break;
+				counter++;
+			}
+
+			tex_displayable_mips = counter;
+			
+			tex->set_active_mips(
+				to_opengl_mip_index(max(tex_displayable_mips -1, 0)), // guard against tex_displayable_mips==0, the 1x1 mipmap will still be shown when rendering the texture, but the user should not actually draw the texture since get_displayable_pixel_density() will return 0
+				to_opengl_mip_index(0));
 		}
 
 		void upload_mip (int mip_indx, unique_ptr<Image2D> img, u64* cache_memory_size_used) {
@@ -91,35 +115,130 @@ struct Texture_Streamer {
 
 			if (!tex)
 				tex = gen_texture();
+			
+			if (0) {
+				static rgba8 colors[] = {
+					rgba8(255,  0,  0, 255),
+					rgba8(  0,255,  0, 255),
+					rgba8(  0,  0,255, 255),
+					rgba8(  0,255,255, 255),
+					rgba8(255,  0,255, 255),
+					rgba8(255,255,  0, 255),
+					rgba8(127,127,127, 255),
+					rgba8(255,127,127, 255),
+					rgba8(127,255,127, 255),
+					rgba8(127,127,255, 255),
+				};
 
-			tex->upload_mip(to_opengl_mip_index(mip_indx), img->pixels, img->size);
+				Image2D mip_visualize_img = Image2D::allocate(img->size);
+
+				for (int y=0; y<mip_visualize_img.size.y; ++y) {
+					for (int x=0; x<mip_visualize_img.size.x; ++x) {
+						mip_visualize_img.get_pixel(x,y) = colors[ mip_indx % ARRLEN(colors) ];
+					}
+				}
+
+				img = make_unique<Image2D>(std::move(mip_visualize_img));
+			}
+
+			tex->upload_mipmap(to_opengl_mip_index(mip_indx), img->pixels, img->size);
 
 			mips[mip_indx].state = Mipmap::CACHED;
 
+			update_displayable_mips();
+
 			*cache_memory_size_used += mips[mip_indx].get_memory_size();
 
-			if (tex_displayable_mips == mip_indx) {
-				tex_displayable_mips++;
-
-				tex->set_active_mips(to_opengl_mip_index(mip_indx), to_opengl_mip_index(0));
-			}
 		}
 
 		void evict_mip (int mip_indx, u64* cache_memory_size_used) {
+			#if 0
 			assert(mips[mip_indx].state == Mipmap::CACHED);
 			assert(tex);
 
-			Texture2D::delete_mipmap(&tex, to_opengl_mip_index(mip_indx), mips[mip_indx].size_px);
+			{ // create a new texture, copy all mipmaps except the one we are deleting, and replace the texture with the new one
+				auto new_tex = gen_texture();
+
+				/*
+				struct Mipmap_Copier {
+					GLuint	fbo;
+				
+					Mipmap_Copier () {
+						glGenFramebuffers(1, &fbo);
+					}
+					~Mipmap_Copier () {
+						glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+						glDeleteFramebuffers(1, &fbo);
+					}
+
+					void copy_mipmap (GLuint dst_tex, GLuint src_tex, int mip, iv2 size_px) {
+
+						glBindTexture(GL_TEXTURE_2D, src_tex);
+						glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip);
+						glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip);
+						
+						glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+						glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, src_tex, mip);
+
+						GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+						assert(status == GL_FRAMEBUFFER_COMPLETE);
+
+						glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+						glBindTexture(GL_TEXTURE_2D, dst_tex);
+						glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip);
+						glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip);
+
+						glTexImage2D(GL_TEXTURE_2D, mip, GL_RGBA8, size_px.x,size_px.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+						glCopyTexSubImage2D(GL_TEXTURE_2D, mip, 0,0, 0,0, size_px.x,size_px.y);
+
+						glBindTexture(GL_TEXTURE_2D, 0);
+					}
+				};
+
+				Mipmap_Copier mc;
+			
+				for (int i=0; i<(int)mips.size(); ++i) {
+					if (i != mip_indx && mips[i].state == Mipmap::CACHED)
+						mc.copy_mipmap(new_tex->get_gpu_handle(), tex->get_gpu_handle(), to_opengl_mip_index(mip_indx), mips[mip_indx].size_px);
+				}
+				*/
+
+
+			}
 
 			mips[mip_indx].state = Mipmap::UNCACHED;
 
-			if (tex_displayable_mips == (mip_indx +1)) {
-				tex_displayable_mips--;
+			if (tex_displayable_mips > mip_indx) {
+				tex_displayable_mips = mip_indx;
 			}
+			
+			// need to set the active mips always, since this is a new texture
+			tex->set_active_mips(
+				to_opengl_mip_index(max(tex_displayable_mips -1, 0)), // guard against tex_displayable_mips==0, the 1x1 mipmap will still be shown when rendering the texture, but the user should not actually draw the texture since get_displayable_pixel_density() will return 0
+				to_opengl_mip_index(0));
+			#else
+			assert(mips[mip_indx].state == Mipmap::CACHED);
+
+			auto sz = mips[mip_indx].size_px;
+
+			// it seems you just can't evict a mipmap that you already uploaded, i'm getting horrible garbage textures and the debugger just gives up and displays no mipmaps at all most of the time
+			//glBindTexture(GL_TEXTURE_2D, tex->get_gpu_handle());
+			//glTexImage2D(GL_TEXTURE_2D, to_opengl_mip_index(mip_indx), GL_RGBA8, sz.x,sz.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+			//glBindTexture(GL_TEXTURE_2D, 0);
+
+			mips[mip_indx].state = Mipmap::UNCACHED;
+
+			update_displayable_mips();
+
+			*cache_memory_size_used -= mips[mip_indx].get_memory_size();
+			#endif
 		}
 	};
 	void imgui_texture_info (string const& filepath) {
-		find_texture(filepath)->imgui();
+		auto* tex = find_texture(filepath);
+		if (tex)
+			tex->imgui();
 	}
 
 	std::map< str, unique_ptr<Cached_Texture> >	textures; // key: filepath
@@ -187,33 +306,26 @@ struct Texture_Streamer {
 		auto it = textures.find(filepath);
 		return it != textures.end() ? it->second.get() : nullptr;
 	}
-	Cached_Texture* find_texture_filepath_from_mip (Mipmap const* mip, int* mip_indx, string const** tex_filepath) { // dumb linear search
-		for (auto& t : textures) {
-			for (int li=0; li<(int)t.second->mips.size(); ++li) {
-				if (&t.second->mips[li] == mip) {
-					*mip_indx = li;
-					*tex_filepath = &t.first;
-					return t.second.get();
-				}
-			}
-		}
-		*mip_indx = -1;
-		*tex_filepath = nullptr;
-		return nullptr;
-	}
 
 	Cached_Texture* add_texture (string const& filepath, iv2 full_size_px) {
 		
 		auto tmp = make_unique<Cached_Texture>();
 		auto* tex = tmp.get();
 		
-		auto ret = textures.emplace(filepath, std::move(tmp));
+		auto& ret = textures.emplace(filepath, std::move(tmp));
 		assert(ret.second);
 
 		{ // init mips
 			iv2 sz = full_size_px;
 			for (;;) {
-				tex->mips.emplace(tex->mips.begin(), Mipmap(+INF, sz, Mipmap::UNCACHED)); // build list of mips to go from smallest (1x1) to biggest
+				Mipmap mip;
+				mip.priority = +INF;
+				mip.size_px = sz;
+				mip.state = Mipmap::UNCACHED;
+				//mip.mip_indx in loop below
+				mip.tex = &*ret.first;
+				
+				tex->mips.insert(tex->mips.begin(), mip); // build list of mips to go from smallest (1x1) to biggest
 
 				if (all(sz == 1))
 					break;
@@ -221,8 +333,9 @@ struct Texture_Streamer {
 				sz = max(sz / 2, 1);
 			}
 			// std::vector of mips will not change after this point
-			for (auto& m : tex->mips) {
-				mips_sorted.push_back( &m ); // safe to take pointer
+			for (int i=0; i<(int)tex->mips.size(); ++i) {
+				tex->mips[i].mip_indx = i;
+				mips_sorted.push_back( &tex->mips[i] ); // safe to take pointer
 			}
 		}
 
@@ -305,21 +418,6 @@ struct Texture_Streamer {
 				}
 				ImGui::End();
 			}
-
-			if (ImGui::TreeNode("textures")) {
-
-				for (auto& t : textures) {
-					bool open = ImGui::TreeNode(t.first.c_str());
-					t.second->debug_is_highlighted = ImGui::IsItemHovered();
-
-					if (open) {
-						t.second->imgui();
-						ImGui::TreePop();
-					}
-				}
-
-				ImGui::TreePop();
-			}
 		}
 
 	}
@@ -360,6 +458,28 @@ struct Texture_Streamer {
 		img_loader_threadpool.jobs.cancel(need_to_cancel_job);
 		*/
 
+		if (ImGui::TreeNode("textures")) {
+
+			for (auto& t : textures) {
+				bool open = ImGui::TreeNode(t.first.c_str());
+				t.second->debug_is_highlighted = ImGui::IsItemHovered();
+
+				if (open) {
+					t.second->imgui();
+					ImGui::TreePop();
+				}
+			}
+
+			ImGui::TreePop();
+		}
+
+		img_loader_threadpool.jobs.cancel_all_and_call_foreach([&] (Threadpool_Job const& job) { // cancel all jobs, so we can re-push them (which mips should be loaded and in which order)
+			auto* tex = find_texture(job.filepath);
+			
+			assert(tex->mips[job.mip_indx].state == Mipmap::CACHING);
+			tex->mips[job.mip_indx].state = Mipmap::UNCACHED;
+		});
+
 		std::stable_sort(mips_sorted.begin(),mips_sorted.end(),
 			[] (Mipmap const* l, Mipmap const* r) {
 				return l->priority < r->priority;
@@ -388,10 +508,6 @@ struct Texture_Streamer {
 		u64 memory_size_total = 0;
 
 		for (auto& m : mips_sorted) {
-			int mip_indx;
-			string const* tex_filepath;
-			auto* tex = find_texture_filepath_from_mip(m, &mip_indx, &tex_filepath); // ugh!
-			
 			u64 mip_sz = m->get_memory_size();
 
 			m->desired_state = (memory_size_total +mip_sz) <= cache_memory_size_desired ? Mipmap::CACHED : Mipmap::UNCACHED;
@@ -402,7 +518,7 @@ struct Texture_Streamer {
 			if (m->desired_state == Mipmap::CACHED) {
 				switch(m->state) {
 					case Mipmap::UNCACHED: {
-						img_loader_threadpool.jobs.push({ *tex_filepath, mip_indx, m->size_px });
+						img_loader_threadpool.jobs.push({ m->tex->first, m->mip_indx, m->size_px });
 
 						m->state = m->CACHING;
 					} break;
@@ -417,14 +533,14 @@ struct Texture_Streamer {
 						// TODO: cancel or ignore when it completes  OR  just go through the normal process of uploading when it completed (it becomes CACHED) so it gets evicted one frame later
 					} break;
 					case Mipmap::CACHED: {
-						tex->evict_mip(mip_indx, &cache_memory_size_used);
+						m->tex->second->evict_mip(m->mip_indx, &cache_memory_size_used);
 					} break;
 					default: assert(false);
 				}
 			}
 
 			if (mips_sorted_open) {
-				ImGui::Text("%10s", tex_filepath->c_str());
+				ImGui::Text("%10s", m->tex->first.c_str());
 				ImGui::NextColumn();
 
 				ImGui::Text("%.5f", m->priority);
