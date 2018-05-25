@@ -56,15 +56,6 @@ public:
 		return (uptr)size.y * get_row_size();
 	}
 
-	rgba8& get_pixel (int x, int y) {					return pixels[y * size.x +x]; }
-	rgba8 const& get_pixel (int x, int y) const {		return pixels[y * size.x +x]; }
-
-	rgba8& get_pixel (iv2 p) {							return get_pixel(p.x,p.y); }
-	rgba8 const& get_pixel (iv2 p) const {				return get_pixel(p.x,p.y); }
-
-	rgba8& get_nearest_pixel_uv (v2 uv) {				return get_pixel((iv2)(uv * (v2)size)); }
-	rgba8 const& get_nearest_pixel_uv (v2 uv) const {	return get_pixel((iv2)(uv * (v2)size)); }
-
 	static Image2D allocate (iv2 size) {
 		Image2D img;
 
@@ -91,6 +82,19 @@ public:
 		return img;
 	}
 
+	rgba8& get_pixel (int x, int y) {					return pixels[y * size.x +x]; }
+	rgba8 const& get_pixel (int x, int y) const {		return pixels[y * size.x +x]; }
+
+	rgba8& get_pixel (iv2 p) {							return get_pixel(p.x,p.y); }
+	rgba8 const& get_pixel (iv2 p) const {				return get_pixel(p.x,p.y); }
+
+	rgba8& get_nearest_pixel (v2 uv) {					return get_pixel((iv2)(uv * (v2)size)); }
+	rgba8 const& sample_nearest_pixel (v2 uv) const {	return get_pixel((iv2)(uv * (v2)size)); }
+
+	rgbaf sample_pixelf (iv2 p) const {
+		return (rgbaf)pixels[p.y * size.x +p.x] / 255.0f;
+	}
+
 	void flip_vertical () {
 		auto* rows = (u8*)pixels;
 		auto row_size = get_row_size();
@@ -104,22 +108,53 @@ public:
 		}
 	}
 
-	static Image2D rescale_nearest (Image2D const& src, iv2 new_size) {
+	static Image2D rescale_sample_nearest (Image2D const& src, iv2 new_size) {
 		
 		auto dst = Image2D::allocate(new_size);
 
 		for (int y=0; y<new_size.y; ++y) {
 			for (int x=0; x<new_size.x; ++x) {
-				dst.get_pixel(x,y) = src.get_nearest_pixel_uv( ((v2)iv2(x,y) +0.5f) / (v2)new_size );
+				dst.get_pixel(x,y) = src.sample_nearest_pixel( ((v2)iv2(x,y) +0.5f) / (v2)new_size );
 			}
 		}
 
 		return std::move(dst);
 	}
-	static Image2D rescale_box_filter (Image2D const& src, iv2 new_size) {
-		
+
+	rgbaf sample_bilinear_pixels (v2 uv) {
+		v2 coord = uv * (v2)size; // coord where each pixel goes from [n, n+1) -> pixel (2,3) lies between (2,3) to (3,4)
+
+		v2 center = coord -0.5f;
+
+		iv2 pixel = (iv2)center;
+		v2 coeff = center -(v2)pixel;
+
+		auto d = sample_pixelf(clamp(pixel +iv2(0,0), 0,size-1));
+		auto c = sample_pixelf(clamp(pixel +iv2(1,0), 0,size-1));
+		auto b = sample_pixelf(clamp(pixel +iv2(0,1), 0,size-1));
+		auto a = sample_pixelf(clamp(pixel +iv2(1,1), 0,size-1));
+
+		return lerp(	lerp(a,b,coeff.x),
+						lerp(c,d,coeff.x), coeff.y );
+	}
+	
+	static Image2D rescale_sample_bilinear (Image2D& src, iv2 new_size) {
+
 		auto dst = Image2D::allocate(new_size);
-		
+
+		for (int y=0; y<new_size.y; ++y) {
+			for (int x=0; x<new_size.x; ++x) {
+				dst.get_pixel(x,y) = (rgba8)(src.sample_bilinear_pixels( ((v2)iv2(x,y) +0.5f) / (v2)new_size ) * 255.0f +0.5f);
+			}
+		}
+
+		return std::move(dst);
+	}
+
+	static Image2D rescale_box_filter (Image2D const& src, iv2 new_size) {
+
+		auto dst = Image2D::allocate(new_size);
+
 		v2 inv_scale_factor = (v2)src.size / (v2)new_size;
 
 		for (int y=0; y<new_size.y; ++y) {
@@ -130,16 +165,16 @@ public:
 				// src pixels to consider
 				iv2 box_l_px = (iv2)floor(box_l);
 				iv2 box_h_px = min( (iv2)ceil(box_h), src.size ); // float imprecision, prevent invalid src pixel access
-				//// how much the low and high pixel rows and columns count (box_l.x == 1.5 -> left column of pixel box considered only counts 0.5)
-				//v2 box_l_factor = 1 -(box_l -(flt)box_l_px.x);
-				//v2 box_h_factor = 1 -((flt)box_h_px.x -box_h);
+																  //// how much the low and high pixel rows and columns count (box_l.x == 1.5 -> left column of pixel box considered only counts 0.5)
+																  //v2 box_l_factor = 1 -(box_l -(flt)box_l_px.x);
+																  //v2 box_h_factor = 1 -((flt)box_h_px.x -box_h);
 
 				v4 accum = 0;
 
 				for (int src_y=box_l_px.y; src_y<box_h_px.y; ++src_y) {
 					for (int src_x=box_l_px.x; src_x<box_h_px.x; ++src_x) {
 						v4 val = (v4)src.get_pixel(iv2(src_x,src_y)) / 255;
-						
+
 						val = v4(to_linear(val.xyz()), val.w);
 
 						//if (src_x == box_l_px.x)
@@ -161,9 +196,10 @@ public:
 				dst.get_pixel(x,y) = (rgba8)(accum * 255 +0.5f);
 			}
 		}
-	
+
 		return std::move(dst);
 	}
+
 };
 void swap (Image2D& l, Image2D& r) {
 	std::swap(l.size,	r.size);

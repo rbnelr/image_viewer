@@ -221,7 +221,7 @@ struct App {
 	}
 
 	void gui () {
-		static str viewed_dir_path_input_text = "P:/img_viewer_sample_files/test"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
+		static str viewed_dir_path_input_text = "P:/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
 		//static str viewed_dir_path_input_text = "C:/Users/uidn7241/Desktop/img_viewer_sample_files/"; // never touch string input, instead make a copy where we fix the escaping of backslashes etc.
 		
 		if (!ImGui::CollapsingHeader("viewed_dir_path", ImGuiTreeNodeFlags_DefaultOpen))
@@ -515,8 +515,17 @@ struct App {
 						auto* img = (Image_File*)c;
 
 						iv2 onscreen_size_px = get_texture_centered_in_cell_onscreen_size(img->size_px);
-						
-						auto* tex = tex_streamer.query(img->filepath, onscreen_size_px, img->size_px);
+						if (any(onscreen_size_px <= 0))
+							break;
+
+						flt order_priority;
+						{
+							flt normalized_dist_to_center_of_grid = length(pos_center_rel) / length(grid_sz_cells/2); // 0 = center 1 = ~corner of screen
+							
+							order_priority = clamp(normalized_dist_to_center_of_grid, 0.0f, 1.0f);
+						}
+
+						auto* tex = tex_streamer.query(img->filepath, onscreen_size_px, img->size_px, order_priority);
 						
 						{
 							v2 rect_l = view_center +pos_center_rel_px -cell_sz/2;
@@ -528,7 +537,7 @@ struct App {
 
 							if (all(mouse >= rect_l && mouse <= rect_h)) {
 								highlight = true;
-								if (rmb.went_down) {
+								if (lmb.went_down) {
 									image_window_open = true;
 									image_window_img = img->filepath;
 								}

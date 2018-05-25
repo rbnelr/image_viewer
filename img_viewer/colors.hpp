@@ -3,8 +3,8 @@
 #include "vector.hpp"
 
 typedef u8v4	rgba8;
-typedef fv4		frgb8;
-typedef fv3		frgba8;
+typedef fv3		rgbf;
+typedef fv4		rgbaf;
 
 template <typename T> T to_linear (T srgb) {
 	return select(srgb <= T(0.0404482362771082),
@@ -19,7 +19,7 @@ template <typename T> T to_srgb (T linear) {
 	);
 }
 
-fv3 hsl_to_rgb (fv3 hsl) {
+rgbf hsl_to_rgb (rgbf hsl) {
 	#if 0
 	// modified from http://www.easyrgb.com/en/math.php
 	f32 H = hsl.x;
@@ -63,13 +63,13 @@ fv3 hsl_to_rgb (fv3 hsl) {
 	f32 x = c * (1.0f -abs(mod(hue6, 2.0f) -1.0f));
 	f32 m = lht -(c/2.0f);
 
-	fv3 rgb;
-	if (		hue6 < 1.0f )	rgb = fv3(c,x,0);
-	else if (	hue6 < 2.0f )	rgb = fv3(x,c,0);
-	else if (	hue6 < 3.0f )	rgb = fv3(0,c,x);
-	else if (	hue6 < 4.0f )	rgb = fv3(0,x,c);
-	else if (	hue6 < 5.0f )	rgb = fv3(x,0,c);
-	else						rgb = fv3(c,0,x);
+	rgbf rgb;
+	if (		hue6 < 1.0f )	rgb = rgbf(c,x,0);
+	else if (	hue6 < 2.0f )	rgb = rgbf(x,c,0);
+	else if (	hue6 < 3.0f )	rgb = rgbf(0,c,x);
+	else if (	hue6 < 4.0f )	rgb = rgbf(0,x,c);
+	else if (	hue6 < 5.0f )	rgb = rgbf(x,0,c);
+	else						rgb = rgbf(c,0,x);
 	rgb += m;
 
 	return to_linear(rgb);

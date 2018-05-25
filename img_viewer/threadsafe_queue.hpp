@@ -4,6 +4,8 @@
 #include <mutex>
 #include <condition_variable>
 
+#include <algorithm>
+
 // with help from https://stackoverflow.com/questions/15278343/c11-thread-safe-queue
 
 template <typename T>
@@ -111,6 +113,13 @@ public:
 		}
 
 		q.clear();
+	}
+
+	template <typename COMPARATOR>
+	void sort (COMPARATOR cmp) {
+		std::lock_guard<std::mutex> lock(m);
+
+		std::sort(q.begin(), q.end(), cmp);
 	}
 
 private:
