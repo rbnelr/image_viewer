@@ -121,6 +121,8 @@ struct Texture_Streamer {
 
 		for (int i=(int)mips.size()-1 -1; i>=0; --i) { // second last to first
 			mips[i] = Image2D::rescale_sample_bilinear(mips[i+1], mips[i].size);
+			//mips[i] = Image2D::rescale_box_filter(mips[i+1], mips[i].size);
+			//mips[i] = Image2D::rescale_sample_nearest(mips[i+1], mips[i].size);
 		}
 
 		return mips;
@@ -161,6 +163,9 @@ struct Texture_Streamer {
 			ImGui::Value("cached_mips", cached_mips);
 			ImGui::Value("desired_cached_mips", desired_cached_mips);
 
+			ImGui::Value("order_priority", order_priority);
+
+			ImGui::Value("was_queried", was_queried);
 			ImGui::Value("threadpool_job_queried", threadpool_job_queued);
 			
 			if (ImGui::TreeNode(prints("mips[%d]###mips", (int)mips.size()).c_str())) {
@@ -169,10 +174,13 @@ struct Texture_Streamer {
 					ImGui::Text("%4d x %4d", m.size_px.x,m.size_px.y);
 
 					ImGui::SameLine();
-					ImGui::Text(m.img ? "img":"null");
+					ImGui::Text(m.img ? "cached":"null");
 
 					ImGui::SameLine();
 					ImGui::Text("%.3f", m.priority);
+
+					ImGui::SameLine();
+					ImGui::Value_Bytes("", m.get_memory_size());
 				}
 				ImGui::TreePop();
 			}
@@ -322,6 +330,8 @@ struct Texture_Streamer {
 			t = remove_texture(t);
 		}
 
+		img_loader_threadpool.jobs.cancel_all();
+
 		assert(textures.size() == 0);
 		assert(cache_memory_size_used == 0);
 	}
@@ -374,12 +384,12 @@ struct Texture_Streamer {
 
 	flt calc_priority (iv2 size_px, iv2 needed_size_px, flt order_priority) {
 		v2 px_dens = (v2)size_px / (v2)needed_size_px;
-		return min(px_dens.x, px_dens.y) * lerp(1, 1.9f, order_priority); // use pixel density as priority and bias by desired "order"
+		return min(px_dens.x, px_dens.y) * lerp(1, 1.25f, order_priority); // use pixel density as priority and bias by desired "order"
 	}
 
 	void queries_begin () { // reset priorities for all mips
 		for (auto& t : textures) {
-			t.order_priority = +1;
+			t.order_priority = +INF;
 			t.was_queried = false;
 			for (auto& m : t.mips) {
 				m.priority = +INF;
@@ -393,7 +403,7 @@ struct Texture_Streamer {
 		if (!tex)
 			tex = add_texture(filepath, full_size_px);
 
-		tex->order_priority = order_priority;
+		tex->order_priority = min(tex->order_priority, order_priority);
 		tex->was_queried = true;
 
 		for (auto& m : tex->mips) {
@@ -610,7 +620,7 @@ struct Texture_Streamer {
 							ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
 						}
 
-						if (ImGui::TreeNode(filepath.c_str())) {
+						if (ImGui::TreeNode( prints("%-70s %2d %8.3f ###%s", filepath.c_str(), tex->desired_cached_mips, tex->order_priority, filepath.c_str()).c_str() )) {
 							
 							tex->imgui();
 

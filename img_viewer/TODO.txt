@@ -1,10 +1,27 @@
+ Implement thumbnail loading (thumbs.db?)
+  -queue a thumbnail load job instead of a normal one if the desired mips are small enough
+  -queue both a thumbnail job and a normal job if needed?
+  -need to know when thumbnail is enough and when not
+  -thumbnails always have priority over normal jobs, since they will difinitely complete way faster
+ 
+ fix center image getting darker issue
+
+ fix zoom center going offscreeen suddenly when dragging around
+
  implement actual image filtering
+ -> need FAST image filtering to improve user experience and reduce cpu usage
  
  arrow keyboard navigation
  
  when zoomed in on image:
   n/N counter to know at which image you are
 
+ implement file change detection and handling
+ -> file delete, and add (rename or move is delete/add) gets handled vy updating the file list
+ -file change (content change including resolution) needs to be handled by the texture streamer:
+ -> simply queue another image load job -> this will refresh the whole image
+ -> also need to make sure on upload_mip() the cached texture updates it's mipmap count and resolutions with the one the loader thread read, because this could change -> if our mipmap info is out of date thats okay, since it only determines the load priorities
+ 
 DONE:
  test my cool image viewer approach
  -> implemted zooming, works really well

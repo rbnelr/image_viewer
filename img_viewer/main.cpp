@@ -348,6 +348,9 @@ struct App {
 		static flt loading_icon_sz = 0.25f;
 		static flt loading_icon_alpha = 0.5f;
 		
+		static bool draw_offscreen_images = false;
+		static flt image_priority_cutoff = 600;
+		
 		if (ImGui::CollapsingHeader("file_grid", ImGuiTreeNodeFlags_DefaultOpen)) {
 			
 			IMGUI_SAVEABLE(		"zoom_smoothing_frames", &zoom_smoothing_frames);
@@ -364,9 +367,6 @@ struct App {
 			if (changed)
 				zoom_multiplier = zoom_multiplier_target;
 			ImGui::DragFloat(	"zoom_multiplier", &zoom_multiplier);
-
-			IMGUI_SAVEABLE(		"debug_view_size_multiplier", &debug_view_size_multiplier);
-			ImGui::DragFloat(	"debug_view_size_multiplier", &debug_view_size_multiplier, 1.0f/300, 0.01f);
 			
 			IMGUI_SAVEABLE(		"view_coord", &view_coord.x);
 			ImGui::DragFloat2(	"view_coord", &view_coord.x, 1.0f / 50);
@@ -376,6 +376,14 @@ struct App {
 
 			ImGui::DragFloat("loading_icon_sz", &loading_icon_sz, 0.01f);
 			ImGui::DragFloat("loading_icon_alpha", &loading_icon_alpha, 0.01f);
+
+
+			IMGUI_SAVEABLE(		"debug_view_size_multiplier", &debug_view_size_multiplier);
+			ImGui::DragFloat(	"debug_view_size_multiplier", &debug_view_size_multiplier, 1.0f/300, 0.01f);
+
+			ImGui::Checkbox("draw_offscreen_images", &draw_offscreen_images);
+
+			ImGui::DragFloat("image_priority_cutoff", &image_priority_cutoff);
 		}
 
 		v2 mouse_coord;
@@ -423,16 +431,25 @@ struct App {
 		
 		for (int content_i=0; content_i<(dir ? (int)dir->content.size() : 0); content_i++) {
 			auto img_instance = [&] (v2 pos_center_rel, flt alpha, bool is_original_instance) {
-				if (	pos_center_rel.y < -grid_sz_cells.y/2 -0.5f ||
-						pos_center_rel.y > +grid_sz_cells.y/2 +0.5f)
-					return;
+				bool onscreen =	pos_center_rel.y >= -grid_sz_cells.y/2 -0.5f &&
+									pos_center_rel.y <= +grid_sz_cells.y/2 +0.5f;
+				
+				flt image_priority; // for texture streamer
+				bool still_query_textures;
+				{
+					flt d = length(pos_center_rel) / length(grid_sz_cells/2); // normalized_dist_to_center_of_grid 0 = center 1 = ~corner of screen
 
-				//if (content_i == (int)roundf(dragged_view_coord.x))
-				//	alpha *= 0.5f;
+					image_priority = d <= 1 ? d : d +powf(2, 6 * (d -1));
 
-				v2 pos_center_rel_px = pos_center_rel * cell_sz;
+					still_query_textures = image_priority <= image_priority_cutoff;
+				}
 
 				auto* c = dir->content[content_i];
+
+				if (!(onscreen || draw_offscreen_images || (still_query_textures && c->type() == FT_IMAGE_FILE)))
+					return;
+
+				v2 pos_center_rel_px = pos_center_rel * cell_sz;
 
 				auto get_texture_centered_in_cell_onscreen_size = [&] (iv2 img_size_px) { // img_size_px is just used to calc the image aspect ratio, so we can use the full image size to find the actual size onscreen
 					v2 border_px = 5;
@@ -518,15 +535,11 @@ struct App {
 						if (any(onscreen_size_px <= 0))
 							break;
 
-						flt order_priority;
-						{
-							flt normalized_dist_to_center_of_grid = length(pos_center_rel) / length(grid_sz_cells/2); // 0 = center 1 = ~corner of screen
-							
-							order_priority = clamp(normalized_dist_to_center_of_grid, 0.0f, 1.0f);
-						}
-
-						auto* tex = tex_streamer.query(img->filepath, onscreen_size_px, img->size_px, order_priority);
+						auto* tex = tex_streamer.query(img->filepath, onscreen_size_px, img->size_px, image_priority);
 						
+						if (!(onscreen || draw_offscreen_images))
+							return;
+
 						{
 							v2 rect_l = view_center +pos_center_rel_px -cell_sz/2;
 							v2 rect_h = view_center +pos_center_rel_px +cell_sz/2;
